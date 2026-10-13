@@ -17,7 +17,7 @@ import java.util.UUID
         FolderEntity::class,
         PromptTemplateEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,7 +38,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "salim_local_database"
                 )
                     .addCallback(DatabaseCallback())
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigration(true)
                     .build()
                 INSTANCE = instance
                 instance

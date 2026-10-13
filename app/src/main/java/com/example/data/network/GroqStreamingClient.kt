@@ -1,15 +1,15 @@
 package com.example.data.network
 
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -19,6 +19,7 @@ import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 
 sealed class StreamEvent {
+    object Connected : StreamEvent()
     data class Token(val text: String) : StreamEvent()
     data class Completed(val fullText: String, val promptTokens: Int, val completionTokens: Int) : StreamEvent()
     data class Error(val error: String) : StreamEvent()
@@ -30,16 +31,48 @@ data class ChatMessagePayload(
 )
 
 class GroqStreamingClient {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    companion object {
+        // Persistent connection pool keeping warm HTTP/2 TLS sockets alive for 10 minutes
+        private val connectionPool = ConnectionPool(8, 10, TimeUnit.MINUTES)
 
-    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+        private val sharedHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectionPool(connectionPool)
+                .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(20, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
+
+        private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    }
 
     /**
-     * Streams responses token-by-token from OpenAI-compatible endpoint.
+     * Prewarms the connection pool so the TLS handshake is already completed
+     * before the user finishes typing their first message.
+     */
+    fun prewarmConnection() {
+        try {
+            val req = Request.Builder()
+                .url("https://api.groq.com/openai/v1/models")
+                .head()
+                .build()
+            sharedHttpClient.newCall(req).enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {}
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    response.close()
+                }
+            })
+        } catch (e: Exception) {
+            // Ignored
+        }
+    }
+
+    /**
+     * Streams responses token-by-token with ZERO artificial delay.
+     * Emits Connected event as soon as the HTTP 200 response header is received.
      */
     fun streamChat(
         apiKey: String,
@@ -52,7 +85,7 @@ class GroqStreamingClient {
         if (apiKey.isBlank()) {
             emit(
                 StreamEvent.Error(
-                    "No API Key configured. Please add your API key in Settings → Advanced / Developer options or configure GROQ_API_KEY in the Secrets panel."
+                    "No API Key configured. Please add your connection key in Settings → Advanced / Developer options or configure GROQ_API_KEY in the Secrets panel."
                 )
             )
             return@flow
@@ -84,12 +117,12 @@ class GroqStreamingClient {
             .post(requestJson.toString().toRequestBody(jsonMediaType))
             .build()
 
-        var accumulatedText = StringBuilder()
+        val accumulatedText = StringBuilder()
         var promptTokens = 0
         var completionTokens = 0
 
         try {
-            val response = client.newCall(request).execute()
+            val response = sharedHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
                 val parsedMsg = try {
@@ -101,6 +134,9 @@ class GroqStreamingClient {
                 emit(StreamEvent.Error("Inference error (${response.code}): $parsedMsg"))
                 return@flow
             }
+
+            // Immediately notify that request is confirmed connected by inference backend
+            emit(StreamEvent.Connected)
 
             val body = response.body
             if (body == null) {
@@ -128,6 +164,7 @@ class GroqStreamingClient {
                                 val textChunk = delta?.optString("content") ?: ""
                                 if (textChunk.isNotEmpty()) {
                                     accumulatedText.append(textChunk)
+                                    // ZERO delay: Emit token immediately as it arrives
                                     emit(StreamEvent.Token(textChunk))
                                 }
                             }
@@ -144,7 +181,6 @@ class GroqStreamingClient {
                 line = reader.readLine()
             }
 
-            // Estimate tokens if not returned in SSE
             if (completionTokens == 0) {
                 completionTokens = (accumulatedText.length / 4).coerceAtLeast(1)
             }
@@ -168,7 +204,7 @@ class GroqStreamingClient {
     }.flowOn(Dispatchers.IO)
 
     /**
-     * Non-streaming call to auto-generate a short title from the first exchange.
+     * Non-blocking lightweight follow-up call to auto-generate a short title from the first exchange.
      */
     suspend fun generateTitle(
         apiKey: String,
@@ -200,7 +236,7 @@ class GroqStreamingClient {
                 .post(requestJson.toString().toRequestBody(jsonMediaType))
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = sharedHttpClient.newCall(request).execute()
             if (response.isSuccessful) {
                 val str = response.body?.string() ?: ""
                 val json = JSONObject(str)

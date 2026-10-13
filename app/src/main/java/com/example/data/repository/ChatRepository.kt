@@ -41,6 +41,10 @@ class ChatRepository(
     private val streamingClient = GroqStreamingClient()
     private val repoScope = CoroutineScope(Dispatchers.IO)
 
+    init {
+        streamingClient.prewarmConnection()
+    }
+
     val activeConversations: Flow<List<ConversationEntity>> = conversationDao.getActiveConversations()
     val archivedConversations: Flow<List<ConversationEntity>> = conversationDao.getArchivedConversations()
     val allFolders: Flow<List<FolderEntity>> = folderDao.getAllFolders()
@@ -218,7 +222,8 @@ class ChatRepository(
             attachmentUri = attachmentUri,
             attachmentType = attachmentType,
             attachmentName = attachmentName,
-            createdAt = System.currentTimeMillis()
+            createdAt = System.currentTimeMillis(),
+            deliveryStatus = "sending"
         )
 
         val assistantPlaceholder = MessageEntity(
@@ -226,10 +231,12 @@ class ChatRepository(
             conversationId = conversationId,
             sender = "assistant",
             content = "",
-            createdAt = System.currentTimeMillis() + 1
+            createdAt = System.currentTimeMillis() + 1,
+            deliveryStatus = "sending"
         )
 
         activeStreamJob = repoScope.launch {
+            // Speculative local echo: insert immediately into database
             messageDao.insert(userMessage)
             messageDao.insert(assistantPlaceholder)
 
@@ -240,19 +247,17 @@ class ChatRepository(
             val systemPrompt = buildSystemPrompt(conversation?.customInstructions)
             val modelId = conversation?.modelId ?: userPreferences.selectedModel.value
 
-            // Prepare context history
+            // Prepare context history (stable prefix to maximize Groq prompt caching)
             val history = messageDao.getMessagesList(conversationId)
             val payloadList = mutableListOf<ChatMessagePayload>()
             payloadList.add(ChatMessagePayload("system", systemPrompt))
 
-            // Add previous conversation messages (excluding the placeholder assistant message)
             for (msg in history) {
                 if (msg.id != assistantMessageId && msg.content.isNotBlank()) {
                     payloadList.add(ChatMessagePayload(msg.sender, msg.content))
                 }
             }
 
-            // Parameters based on response style
             val style = userPreferences.responseStyle.value
             val temp = when (style) {
                 "concise" -> 0.4f
@@ -281,6 +286,11 @@ class ChatRepository(
                 maxTokens = maxTokens
             ).collect { event ->
                 when (event) {
+                    is StreamEvent.Connected -> {
+                        // Request is confirmed sent to inference backend
+                        messageDao.updateDeliveryStatus(userMessageId, "sent")
+                        messageDao.updateDeliveryStatus(assistantMessageId, "sent")
+                    }
                     is StreamEvent.Token -> {
                         accumulated.append(event.text)
                         _streamingContent.value = accumulated.toString()
@@ -293,25 +303,34 @@ class ChatRepository(
                         val finalContent = if (accumulated.isNotEmpty()) accumulated.toString() else event.fullText
                         val updatedAssistant = assistantPlaceholder.copy(
                             content = finalContent,
-                            tokenCount = event.completionTokens
+                            tokenCount = event.completionTokens,
+                            deliveryStatus = "sent"
                         )
                         messageDao.update(updatedAssistant)
+                        messageDao.updateDeliveryStatus(userMessageId, "sent")
 
-                        // Update conversation snippet and updatedAt
+                        // Update conversation snippet and updatedAt immediately
                         val snippet = finalContent.take(120).replace("\n", " ")
                         val conv = conversationDao.getConversationById(conversationId)
                         if (conv != null) {
-                            var newTitle = conv.title
-                            if (conv.title == "New conversation" || conv.title.isBlank()) {
-                                newTitle = streamingClient.generateTitle(apiKey, prompt, finalContent)
-                            }
                             conversationDao.update(
                                 conv.copy(
-                                    title = newTitle,
                                     lastMessageSnippet = snippet,
                                     updatedAt = System.currentTimeMillis()
                                 )
                             )
+
+                            // Title generation runs fully asynchronously in background:
+                            // NEVER blocks or delays the user from seeing their answer!
+                            if (conv.title == "New conversation" || conv.title.isBlank()) {
+                                repoScope.launch(Dispatchers.IO) {
+                                    val generatedTitle = streamingClient.generateTitle(apiKey, prompt, finalContent)
+                                    val currentConv = conversationDao.getConversationById(conversationId)
+                                    if (currentConv != null && (currentConv.title == "New conversation" || currentConv.title.isBlank())) {
+                                        conversationDao.updateTitle(conversationId, generatedTitle)
+                                    }
+                                }
+                            }
                         }
                     }
                     is StreamEvent.Error -> {
@@ -322,7 +341,12 @@ class ChatRepository(
                         val errorContent = accumulated.toString().ifEmpty {
                             "⚠️ ${event.error}"
                         }
-                        messageDao.update(assistantPlaceholder.copy(content = errorContent))
+                        messageDao.update(
+                            assistantPlaceholder.copy(
+                                content = errorContent,
+                                deliveryStatus = "failed"
+                            )
+                        )
                     }
                 }
             }

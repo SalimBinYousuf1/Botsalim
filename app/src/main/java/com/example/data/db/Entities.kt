@@ -49,7 +49,8 @@ data class MessageEntity(
     val tokenCount: Int = 0,
     val attachmentUri: String? = null,
     val attachmentType: String? = null, // "image", "document", "text"
-    val attachmentName: String? = null
+    val attachmentName: String? = null,
+    val deliveryStatus: String = "sent" // "sending", "sent", "failed"
 )
 
 @Entity(tableName = "folders")

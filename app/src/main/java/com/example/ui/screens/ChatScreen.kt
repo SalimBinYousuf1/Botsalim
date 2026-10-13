@@ -50,14 +50,18 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -883,16 +887,40 @@ private fun UserMessageBubble(
             }
         }
 
-        // Timestamp
-        if (showTimestamp) {
-            val formattedTime = remember(message.createdAt) {
-                SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(message.createdAt))
+        // Speculative local echo delivery-status indicator & timestamp
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = 4.dp, end = 6.dp)
+        ) {
+            if (showTimestamp) {
+                val formattedTime = remember(message.createdAt) {
+                    SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(message.createdAt))
+                }
+                Text(
+                    text = formattedTime,
+                    style = SalimTextStyles.Caption,
+                    color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
             }
-            Text(
-                text = formattedTime,
-                style = SalimTextStyles.Caption,
-                color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight,
-                modifier = Modifier.padding(top = 4.dp, end = 6.dp)
+
+            // Speculative local echo: transitions delivery status indicator without re-rendering bubble
+            val statusIcon = when (message.deliveryStatus) {
+                "sending" -> Icons.Default.Schedule
+                "failed" -> Icons.Default.ErrorOutline
+                else -> Icons.Default.DoneAll
+            }
+            val statusTint = when (message.deliveryStatus) {
+                "sending" -> (if (isDark) SecondaryCaptionDark else SecondaryCaptionLight).copy(alpha = 0.5f)
+                "failed" -> Color(0xFFD32F2F)
+                else -> AccentGreen
+            }
+
+            Icon(
+                imageVector = statusIcon,
+                contentDescription = "Delivery status: ${message.deliveryStatus}",
+                tint = statusTint,
+                modifier = Modifier.size(13.dp)
             )
         }
     }
@@ -918,6 +946,17 @@ private fun AssistantMessageBubble(
     val bgColor = if (isDark) AssistantBubbleBgDark else AssistantBubbleBgLight
     val textColor = if (isDark) AssistantBubbleTextDark else AssistantBubbleTextLight
 
+    // Perceived-latency floor: only show indicator if first token takes > 400ms
+    var showLatencyFloor by remember { mutableStateOf(false) }
+    LaunchedEffect(isStreaming, content.isNotEmpty()) {
+        if (isStreaming && content.isEmpty()) {
+            delay(400)
+            showLatencyFloor = true
+        } else {
+            showLatencyFloor = false
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
@@ -932,18 +971,25 @@ private fun AssistantMessageBubble(
         ) {
             Column {
                 if (content.isBlank() && isStreaming) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = AccentGreen
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Thinking...",
-                            style = SalimTextStyles.Secondary,
-                            color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
-                        )
+                    if (showLatencyFloor) {
+                        // Non-janky lightweight indicator shown strictly after 400ms floor
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(AccentGreen)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Formulating response...",
+                                style = SalimTextStyles.Secondary,
+                                color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
+                            )
+                        }
+                    } else {
+                        // Under 400ms: no flash or jank, renders immediately upon first token arrival
+                        Spacer(modifier = Modifier.height(20.dp))
                     }
                 } else {
                     SalimMarkdownRenderer(
