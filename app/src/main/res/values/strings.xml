@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Salim</string>
+    <string name="shortcut_new_chat">New Chat</string>
+    <string name="shortcut_new_chat_long">Start a new conversation in Salim</string>
+</resources>

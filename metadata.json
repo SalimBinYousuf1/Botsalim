@@ -1,0 +1,6 @@
+{
+  "name": "Salim",
+  "description": "A mature, elegant conversational assistant with local-first persistence, streaming responses, and refined aesthetic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
