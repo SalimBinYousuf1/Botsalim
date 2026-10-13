@@ -562,6 +562,75 @@ class ChatRepository(
     }
 
     /**
+     * Read-only conversation export as a clean, formatted document (HTML)
+     * Preserving real rendered typography (Lora serif headings, Plus Jakarta Sans body, no bubble for assistant)
+     */
+    suspend fun exportConversationAsHtml(conversationId: String): String = withContext(Dispatchers.IO) {
+        val conv = conversationDao.getConversationById(conversationId) ?: return@withContext ""
+        val messages = messageDao.getMessagesList(conversationId)
+        val dateFormat = SimpleDateFormat("MMMM d, yyyy · h:mm a", Locale.getDefault())
+
+        val html = StringBuilder().apply {
+            append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n")
+            append("<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n")
+            append("<title>${conv.title} — Salim</title>\n")
+            append("<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n")
+            append("<link href=\"https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,600;0,700;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap\" rel=\"stylesheet\">\n")
+            append("<style>\n")
+            append("  :root { --bg-top: #8A9A86; --bg-bottom: #F7F5EE; --headline: #181E19; --body: #252D26; --card-radius: 22px; }\n")
+            append("  * { box-sizing: border-box; }\n")
+            append("  body { margin: 0; padding: 40px 20px; font-family: 'Plus Jakarta Sans', sans-serif; background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 350px, var(--bg-bottom) 100%); min-height: 100vh; color: var(--body); display: flex; justify-content: center; }\n")
+            append("  .container { max-width: 720px; width: 100%; }\n")
+            append("  header { margin-bottom: 40px; text-align: left; padding-bottom: 20px; border-bottom: 1px solid rgba(0,0,0,0.08); }\n")
+            append("  h1.doc-title { font-family: 'Lora', serif; font-size: 32px; font-weight: 700; color: var(--headline); margin: 0 0 8px 0; }\n")
+            append("  .doc-meta { font-size: 13px; color: #5D675E; }\n")
+            append("  .message-wrapper { margin-bottom: 28px; display: flex; flex-direction: column; }\n")
+            append("  .user-wrapper { align-items: flex-end; }\n")
+            append("  .assistant-wrapper { align-items: flex-start; }\n")
+            append("  .user-bubble { background: #202621; color: #FFFFFF; padding: 14px 20px; border-radius: var(--card-radius); max-width: 80%; font-size: 16px; line-height: 1.5; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }\n")
+            append("  .assistant-content { background: transparent; padding: 4px 0; width: 100%; font-size: 16.5px; line-height: 1.6; color: var(--headline); }\n")
+            append("  .assistant-content h1, .assistant-content h2, .assistant-content h3 { font-family: 'Lora', serif; color: var(--headline); margin-top: 24px; margin-bottom: 8px; font-weight: 700; }\n")
+            append("  .assistant-content code { font-family: 'JetBrains Mono', monospace; font-size: 13.5px; background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 6px; }\n")
+            append("  .assistant-content pre { font-family: 'JetBrains Mono', monospace; font-size: 13.5px; background: #1B201C; color: #F0F4EF; padding: 16px; border-radius: var(--card-radius); overflow-x: auto; }\n")
+            append("  .assistant-content pre code { background: transparent; color: inherit; padding: 0; }\n")
+            append("  .assistant-content ul, .assistant-content ol { padding-left: 20px; margin: 12px 0; }\n")
+            append("  .assistant-content li { margin-bottom: 8px; }\n")
+            append("  .time-stamp { font-size: 11.5px; color: #7F8B80; margin-top: 6px; }\n")
+            append("</style>\n</head>\n<body>\n")
+            append("<div class=\"container\">\n")
+            append("<header><h1 class=\"doc-title\">${conv.title}</h1><div class=\"doc-meta\">Dialogue recorded by Salim · ${dateFormat.format(Date(conv.createdAt))}</div></header>\n")
+            for (m in messages) {
+                val timeStr = dateFormat.format(Date(m.createdAt))
+                if (m.sender == "user") {
+                    append("<div class=\"message-wrapper user-wrapper\">\n")
+                    append("  <div class=\"user-bubble\">${m.content.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")}</div>\n")
+                    append("  <div class=\"time-stamp\">$timeStr</div>\n")
+                    append("</div>\n")
+                } else {
+                    append("<div class=\"message-wrapper assistant-wrapper\">\n")
+                    // Render basic markdown tags for HTML preview
+                    val rendered = m.content
+                        .replace("<", "&lt;").replace(">", "&gt;")
+                        .replace(Regex("### (.+)"), "<h3>$1</h3>")
+                        .replace(Regex("## (.+)"), "<h2>$1</h2>")
+                        .replace(Regex("# (.+)"), "<h1>$1</h1>")
+                        .replace(Regex("\\*\\*(.+?)\\*\\*"), "<strong>$1</strong>")
+                        .replace(Regex("\\*(.+?)\\*"), "<em>$1</em>")
+                        .replace(Regex("```([a-zA-Z]*)\n([\\s\\S]*?)```"), "<pre><code>$2</code></pre>")
+                        .replace(Regex("`([^`]+)`"), "<code>$1</code>")
+                        .replace("\n\n", "</p><p>")
+                        .replace("\n", "<br>")
+                    append("  <div class=\"assistant-content\"><p>$rendered</p></div>\n")
+                    append("  <div class=\"time-stamp\">Salim · $timeStr</div>\n")
+                    append("</div>\n")
+                }
+            }
+            append("</div>\n</body>\n</html>\n")
+        }
+        html.toString()
+    }
+
+    /**
      * Full archive JSON export (Feature 26).
      */
     suspend fun exportFullArchiveJson(): String = withContext(Dispatchers.IO) {

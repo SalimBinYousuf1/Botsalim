@@ -3,7 +3,6 @@ package com.example.ui.components
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
@@ -42,6 +42,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,7 +55,7 @@ import com.example.ui.theme.SalimTextStyles
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private sealed class MarkdownBlock {
+sealed class MarkdownBlock {
     data class Paragraph(val text: String) : MarkdownBlock()
     data class Heading(val level: Int, val text: String) : MarkdownBlock()
     data class CodeBlock(val language: String, val code: String) : MarkdownBlock()
@@ -66,128 +67,252 @@ private sealed class MarkdownBlock {
     object Divider : MarkdownBlock()
 }
 
+/**
+ * SalimMarkdownRenderer
+ *
+ * Implements Section M:
+ * 1. Two-typeface system: Serif display face (Lora) for headings H1/H2/H3, sans-serif (Plus Jakarta Sans) for body.
+ * 2. Bold-term-then-explanation list pattern for bulleted and numbered lists.
+ * 3. Zero leaked syntax with mid-stream incomplete formatting buffer.
+ * 4. Generous vertical whitespace between paragraphs (14dp), list items (8dp), and headings (20dp top).
+ * 5. Word-level highlighting during text-to-speech read aloud (Section U.18).
+ * 6. Selectable text for "Explain this" contextual comprehension (Section R.9).
+ */
 @Composable
 fun SalimMarkdownRenderer(
     content: String,
     modifier: Modifier = Modifier,
     textColor: Color = Color.Unspecified,
-    isDark: Boolean = false
+    isDark: Boolean = false,
+    activeWordRange: Pair<Int, Int>? = null,
+    isStreaming: Boolean = false,
+    fontScale: Float = 1.0f
 ) {
-    val blocks = remember(content) { parseMarkdownBlocks(content) }
+    // Sanitize incomplete trailing markdown tokens during streaming to prevent syntax flicker
+    val sanitizedContent = remember(content, isStreaming) {
+        if (isStreaming) sanitizeIncompleteStreamingMarkdown(content) else content
+    }
 
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        blocks.forEach { block ->
-            when (block) {
-                is MarkdownBlock.Heading -> {
-                    val style = when (block.level) {
-                        1 -> SalimTextStyles.HeadlineMedium
-                        2 -> SalimTextStyles.Title
-                        else -> SalimTextStyles.Body.copy(fontWeight = FontWeight.Bold)
+    val blocks = remember(sanitizedContent) { parseMarkdownBlocks(sanitizedContent) }
+
+    SelectionContainer {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(14.dp) // Generous paragraph whitespace
+        ) {
+            blocks.forEach { block ->
+                when (block) {
+                    is MarkdownBlock.Heading -> {
+                        val (style, topPadding, bottomPadding) = when (block.level) {
+                            1 -> Triple(SalimTextStyles.SerifH1, 24.dp, 8.dp)
+                            2 -> Triple(SalimTextStyles.SerifH2, 20.dp, 6.dp)
+                            3 -> Triple(SalimTextStyles.SerifH3, 16.dp, 4.dp)
+                            4 -> Triple(SalimTextStyles.SerifH3.copy(fontSize = 17.sp), 12.dp, 4.dp)
+                            else -> Triple(SalimTextStyles.SerifH3.copy(fontSize = 15.sp), 10.dp, 2.dp)
+                        }
+                        Text(
+                            text = buildAnnotatedInline(block.text, textColor, isDark, activeWordRange, content, isStreaming),
+                            style = style.copy(fontSize = (style.fontSize.value * fontScale).sp),
+                            color = textColor,
+                            modifier = Modifier.padding(top = topPadding, bottom = bottomPadding)
+                        )
                     }
-                    Text(
-                        text = buildAnnotatedInline(block.text, textColor, isDark),
-                        style = style,
-                        color = textColor
-                    )
-                }
-                is MarkdownBlock.Paragraph -> {
-                    Text(
-                        text = buildAnnotatedInline(block.text, textColor, isDark),
-                        style = SalimTextStyles.Body,
-                        color = textColor
-                    )
-                }
-                is MarkdownBlock.CodeBlock -> {
-                    RenderCodeBlock(
-                        language = block.language,
-                        code = block.code,
-                        isDark = isDark
-                    )
-                }
-                is MarkdownBlock.MathBlock -> {
-                    RenderMathBlock(
-                        latex = block.latex,
-                        isDark = isDark
-                    )
-                }
-                is MarkdownBlock.BlockQuote -> {
-                    RenderBlockQuote(
-                        text = block.text,
-                        textColor = textColor,
-                        isDark = isDark
-                    )
-                }
-                is MarkdownBlock.BulletList -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        block.items.forEach { item ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                Text(
-                                    text = "• ",
-                                    style = SalimTextStyles.Body.copy(fontWeight = FontWeight.Bold),
-                                    color = if (isDark) AccentGold else AccentGreen,
-                                    modifier = Modifier.padding(start = 4.dp, end = 6.dp)
-                                )
-                                Text(
-                                    text = buildAnnotatedInline(item, textColor, isDark),
-                                    style = SalimTextStyles.Body,
-                                    color = textColor
-                                )
+
+                    is MarkdownBlock.Paragraph -> {
+                        Text(
+                            text = buildAnnotatedInline(block.text, textColor, isDark, activeWordRange, content, isStreaming),
+                            style = SalimTextStyles.Body.copy(
+                                fontSize = (17 * fontScale).sp,
+                                lineHeight = (25 * fontScale).sp
+                            ),
+                            color = textColor
+                        )
+                    }
+
+                    is MarkdownBlock.CodeBlock -> {
+                        RenderCodeBlock(
+                            language = block.language,
+                            code = block.code,
+                            isDark = isDark,
+                            fontScale = fontScale
+                        )
+                    }
+
+                    is MarkdownBlock.MathBlock -> {
+                        RenderMathBlock(
+                            latex = block.latex,
+                            isDark = isDark,
+                            fontScale = fontScale
+                        )
+                    }
+
+                    is MarkdownBlock.BlockQuote -> {
+                        RenderBlockQuote(
+                            text = block.text,
+                            textColor = textColor,
+                            isDark = isDark,
+                            fontScale = fontScale,
+                            activeWordRange = activeWordRange,
+                            fullContent = content,
+                            isStreaming = isStreaming
+                        )
+                    }
+
+                    is MarkdownBlock.BulletList -> {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        ) {
+                            block.items.forEach { item ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Text(
+                                        text = "•",
+                                        style = SalimTextStyles.Body.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = (17 * fontScale).sp
+                                        ),
+                                        color = if (isDark) AccentGold else AccentGreen,
+                                        modifier = Modifier.padding(start = 2.dp, end = 10.dp)
+                                    )
+                                    Text(
+                                        text = formatBoldTermListInline(item, textColor, isDark, activeWordRange, content, isStreaming),
+                                        style = SalimTextStyles.Body.copy(
+                                            fontSize = (17 * fontScale).sp,
+                                            lineHeight = (24 * fontScale).sp
+                                        ),
+                                        color = textColor,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                is MarkdownBlock.NumberedList -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        block.items.forEachIndexed { idx, item ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                Text(
-                                    text = "${idx + 1}. ",
-                                    style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold),
-                                    color = if (isDark) AccentGold else AccentGreen,
-                                    modifier = Modifier.padding(start = 4.dp, end = 6.dp)
-                                )
-                                Text(
-                                    text = buildAnnotatedInline(item, textColor, isDark),
-                                    style = SalimTextStyles.Body,
-                                    color = textColor
-                                )
+
+                    is MarkdownBlock.NumberedList -> {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        ) {
+                            block.items.forEachIndexed { idx, item ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Text(
+                                        text = "${idx + 1}.",
+                                        style = SalimTextStyles.Body.copy(
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = (17 * fontScale).sp
+                                        ),
+                                        color = if (isDark) AccentGold else AccentGreen,
+                                        modifier = Modifier.padding(start = 2.dp, end = 8.dp)
+                                    )
+                                    Text(
+                                        text = formatBoldTermListInline(item, textColor, isDark, activeWordRange, content, isStreaming),
+                                        style = SalimTextStyles.Body.copy(
+                                            fontSize = (17 * fontScale).sp,
+                                            lineHeight = (24 * fontScale).sp
+                                        ),
+                                        color = textColor,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                is MarkdownBlock.Table -> {
-                    RenderTable(
-                        headers = block.headers,
-                        rows = block.rows,
-                        isDark = isDark
-                    )
-                }
-                is MarkdownBlock.Divider -> {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 4.dp),
-                        thickness = 1.dp,
-                        color = if (isDark) Color(0xFF333833) else Color(0xFFD6DAD4)
-                    )
+
+                    is MarkdownBlock.Table -> {
+                        RenderTable(
+                            headers = block.headers,
+                            rows = block.rows,
+                            isDark = isDark,
+                            fontScale = fontScale
+                        )
+                    }
+
+                    is MarkdownBlock.Divider -> {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            thickness = 1.dp,
+                            color = if (isDark) Color(0xFF2C322C) else Color(0xFFD6DAD4)
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * Bold-term-then-explanation list pattern (Section M.3):
+ * In numbered or bulleted lists, the lead term or phrase of each item renders in bold,
+ * followed by an em-dash or colon, continuing in regular weight for the explanation.
+ */
+private fun formatBoldTermListInline(
+    itemText: String,
+    baseColor: Color,
+    isDark: Boolean,
+    activeWordRange: Pair<Int, Int>?,
+    fullContent: String,
+    isStreaming: Boolean = false
+): AnnotatedString {
+    // Case 1: Item already has explicit bold at the beginning: "**Term**: rest" or "**Term** — rest" or "**Term** rest"
+    val boldLeadRegex = Regex("^\\*\\*(.+?)\\*\\*([:\\s—–-]*)(.*)", RegexOption.DOT_MATCHES_ALL)
+    val boldLeadMatch = boldLeadRegex.find(itemText)
+    if (boldLeadMatch != null) {
+        val term = boldLeadMatch.groupValues[1].trim()
+        val rest = boldLeadMatch.groupValues[3].trim()
+        val separator = if (boldLeadMatch.groupValues[2].contains(":")) ": " else " — "
+        val reformatted = "**$term**$separator$rest"
+        return buildAnnotatedInline(reformatted, baseColor, isDark, activeWordRange, fullContent, isStreaming)
+    }
+
+    // Case 2: Item has "Term: Explanation" or "Term — Explanation" without existing bold marks
+    val termColonRegex = Regex("^([^:—–\n]{2,45})([:—–])\\s*(.+)", RegexOption.DOT_MATCHES_ALL)
+    val termMatch = termColonRegex.find(itemText)
+    if (termMatch != null) {
+        val term = termMatch.groupValues[1].trim()
+        val sep = termMatch.groupValues[2]
+        val rest = termMatch.groupValues[3].trim()
+        val normalizedSep = if (sep == ":") ": " else " — "
+        val reformatted = "**$term**$normalizedSep$rest"
+        return buildAnnotatedInline(reformatted, baseColor, isDark, activeWordRange, fullContent, isStreaming)
+    }
+
+    // Fallback: standard inline formatting
+    return buildAnnotatedInline(itemText, baseColor, isDark, activeWordRange, fullContent, isStreaming)
+}
+
+/**
+ * Mid-stream sanitization: holds back incomplete formatting tokens at the end of the text.
+ */
+private fun sanitizeIncompleteStreamingMarkdown(text: String): String {
+    var s = text.trimEnd()
+    // If text ends with incomplete bold/italic/code markers, strip them cleanly
+    while (s.endsWith("***") || s.endsWith("**") || s.endsWith("```") || s.endsWith("~~") || s.endsWith("__")) {
+        if (s.endsWith("***")) s = s.dropLast(3)
+        if (s.endsWith("```")) s = s.dropLast(3)
+        if (s.endsWith("**")) s = s.dropLast(2)
+        if (s.endsWith("~~")) s = s.dropLast(2)
+        if (s.endsWith("__")) s = s.dropLast(2)
+    }
+    if (s.endsWith("*") && !s.endsWith(" *")) s = s.dropLast(1)
+    if (s.endsWith("_") && !s.endsWith(" _")) s = s.dropLast(1)
+    if (s.endsWith("`") && !s.endsWith(" `")) s = s.dropLast(1)
+    if (s.endsWith("#")) s = s.dropLast(1)
+    if (s.endsWith("[")) s = s.dropLast(1)
+    return s
+}
+
 @Composable
 private fun RenderCodeBlock(
     language: String,
     code: String,
-    isDark: Boolean
+    isDark: Boolean,
+    fontScale: Float
 ) {
     val context = LocalContext.current
     var copied by remember { mutableStateOf(false) }
@@ -202,7 +327,6 @@ private fun RenderCodeBlock(
             .clip(SalimShape)
             .background(codeBg)
     ) {
-        // Code header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -238,7 +362,6 @@ private fun RenderCodeBlock(
             }
         }
 
-        // Horizontal scrollable code body
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -247,7 +370,7 @@ private fun RenderCodeBlock(
         ) {
             Text(
                 text = code,
-                style = SalimTextStyles.Code,
+                style = SalimTextStyles.Code.copy(fontSize = (14 * fontScale).sp),
                 color = Color(0xFFF1F5F0)
             )
         }
@@ -257,7 +380,8 @@ private fun RenderCodeBlock(
 @Composable
 private fun RenderMathBlock(
     latex: String,
-    isDark: Boolean
+    isDark: Boolean,
+    fontScale: Float
 ) {
     val mathBg = if (isDark) Color(0xFF1E211E) else Color(0xFFF0F3ED)
     val formattedMath = formatLatexToReadable(latex)
@@ -275,7 +399,8 @@ private fun RenderMathBlock(
             style = SalimTextStyles.Body.copy(
                 fontStyle = FontStyle.Italic,
                 fontWeight = FontWeight.Medium,
-                letterSpacing = 0.5.sp
+                letterSpacing = 0.5.sp,
+                fontSize = (17 * fontScale).sp
             ),
             color = if (isDark) Color(0xFFD6DBD3) else Color(0xFF263028)
         )
@@ -286,7 +411,11 @@ private fun RenderMathBlock(
 private fun RenderBlockQuote(
     text: String,
     textColor: Color,
-    isDark: Boolean
+    isDark: Boolean,
+    fontScale: Float,
+    activeWordRange: Pair<Int, Int>?,
+    fullContent: String,
+    isStreaming: Boolean = false
 ) {
     val barColor = if (isDark) AccentGold else AccentGreen
 
@@ -298,14 +427,17 @@ private fun RenderBlockQuote(
         Box(
             modifier = Modifier
                 .width(4.dp)
-                .height(28.dp)
+                .height(30.dp)
                 .clip(CircleShape)
                 .background(barColor)
         )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
-            text = buildAnnotatedInline(text, textColor, isDark),
-            style = SalimTextStyles.Body.copy(fontStyle = FontStyle.Italic),
+            text = buildAnnotatedInline(text, textColor, isDark, activeWordRange, fullContent, isStreaming),
+            style = SalimTextStyles.Body.copy(
+                fontStyle = FontStyle.Italic,
+                fontSize = (17 * fontScale).sp
+            ),
             color = textColor.copy(alpha = 0.9f)
         )
     }
@@ -315,7 +447,8 @@ private fun RenderBlockQuote(
 private fun RenderTable(
     headers: List<String>,
     rows: List<List<String>>,
-    isDark: Boolean
+    isDark: Boolean,
+    fontScale: Float
 ) {
     val tableBg = if (isDark) Color(0xFF1B1E1B) else Color(0xFFF4F6F2)
     val borderColor = if (isDark) Color(0xFF2C322C) else Color(0xFFDDE2DA)
@@ -328,17 +461,19 @@ private fun RenderTable(
             .horizontalScroll(rememberScrollState())
             .padding(8.dp)
     ) {
-        // Headers
         Row(modifier = Modifier.padding(vertical = 4.dp)) {
             headers.forEach { header ->
                 Box(
                     modifier = Modifier
-                        .width(130.dp)
+                        .width(140.dp)
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
                         text = header.trim(),
-                        style = SalimTextStyles.Secondary.copy(fontWeight = FontWeight.Bold),
+                        style = SalimTextStyles.Secondary.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = (15 * fontScale).sp
+                        ),
                         color = if (isDark) Color(0xFFE5EAE2) else Color(0xFF1E2420)
                     )
                 }
@@ -347,18 +482,17 @@ private fun RenderTable(
 
         HorizontalDivider(thickness = 1.dp, color = borderColor)
 
-        // Rows
         rows.forEach { row ->
             Row(modifier = Modifier.padding(vertical = 4.dp)) {
                 row.forEachIndexed { i, cell ->
                     Box(
                         modifier = Modifier
-                            .width(130.dp)
+                            .width(140.dp)
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = cell.trim(),
-                            style = SalimTextStyles.Secondary,
+                            style = SalimTextStyles.Secondary.copy(fontSize = (15 * fontScale).sp),
                             color = if (isDark) Color(0xFFC8CEC5) else Color(0xFF333B35)
                         )
                     }
@@ -369,9 +503,6 @@ private fun RenderTable(
     }
 }
 
-/**
- * Parses markdown into structured blocks while streaming gracefully.
- */
 private fun parseMarkdownBlocks(rawText: String): List<MarkdownBlock> {
     val blocks = mutableListOf<MarkdownBlock>()
     val lines = rawText.lines()
@@ -380,15 +511,13 @@ private fun parseMarkdownBlocks(rawText: String): List<MarkdownBlock> {
     while (i < lines.size) {
         val line = lines[i]
 
-        // Check fenced code block
+        // Fenced code block
         if (line.trimStart().startsWith("```")) {
             val language = line.trimStart().removePrefix("```").trim()
             val codeBuilder = StringBuilder()
             i++
-            var closed = false
             while (i < lines.size) {
                 if (lines[i].trimStart().startsWith("```")) {
-                    closed = true
                     i++
                     break
                 }
@@ -400,7 +529,7 @@ private fun parseMarkdownBlocks(rawText: String): List<MarkdownBlock> {
             continue
         }
 
-        // Check block math: $$ ... $$
+        // Block math: $$ ... $$
         if (line.trim().startsWith("$$")) {
             val mathBuilder = StringBuilder()
             val singleLine = line.trim().removePrefix("$$").removeSuffix("$$").trim()
@@ -430,19 +559,12 @@ private fun parseMarkdownBlocks(rawText: String): List<MarkdownBlock> {
             continue
         }
 
-        // Headings
-        if (line.startsWith("# ")) {
-            blocks.add(MarkdownBlock.Heading(1, line.removePrefix("# ").trim()))
-            i++
-            continue
-        }
-        if (line.startsWith("## ")) {
-            blocks.add(MarkdownBlock.Heading(2, line.removePrefix("## ").trim()))
-            i++
-            continue
-        }
-        if (line.startsWith("### ")) {
-            blocks.add(MarkdownBlock.Heading(3, line.removePrefix("### ").trim()))
+        // Headings (H1 through H6)
+        val headingMatch = Regex("^(#{1,6})\\s+(.*)").find(line)
+        if (headingMatch != null) {
+            val level = headingMatch.groupValues[1].length
+            val headingText = headingMatch.groupValues[2].trim()
+            blocks.add(MarkdownBlock.Heading(level, headingText))
             i++
             continue
         }
@@ -486,7 +608,7 @@ private fun parseMarkdownBlocks(rawText: String): List<MarkdownBlock> {
         // Table
         if (line.contains("|") && i + 1 < lines.size && lines[i + 1].contains("---")) {
             val headers = line.split("|").filter { it.isNotBlank() }
-            i += 2 // skip header & separator
+            i += 2
             val rows = mutableListOf<List<String>>()
             while (i < lines.size && lines[i].contains("|")) {
                 val rowCells = lines[i].split("|").filter { it.isNotBlank() }
@@ -497,12 +619,13 @@ private fun parseMarkdownBlocks(rawText: String): List<MarkdownBlock> {
             continue
         }
 
-        // Regular paragraph or empty line
+        // Blank lines
         if (line.isBlank()) {
             i++
             continue
         }
 
+        // Regular paragraph
         val paragraphBuilder = StringBuilder(line)
         i++
         while (i < lines.size && lines[i].isNotBlank() &&
@@ -524,19 +647,23 @@ private fun parseMarkdownBlocks(rawText: String): List<MarkdownBlock> {
 }
 
 /**
- * Parses inline spans: bold, italic, code, math.
+ * Builds annotated string for inline tokens: bold, italic, code, math, strikethrough.
+ * Also applies real-time word-level TTS highlighting if activeWordRange is provided.
  */
 private fun buildAnnotatedInline(
     text: String,
     baseColor: Color,
-    isDark: Boolean
+    isDark: Boolean,
+    activeWordRange: Pair<Int, Int>? = null,
+    fullContent: String = "",
+    isStreaming: Boolean = false
 ): AnnotatedString {
     return buildAnnotatedString {
         var cursor = 0
         val len = text.length
 
         while (cursor < len) {
-            // Check inline code: `code`
+            // Inline code: `code`
             if (text[cursor] == '`') {
                 val end = text.indexOf('`', cursor + 1)
                 if (end != -1) {
@@ -553,10 +680,24 @@ private fun buildAnnotatedInline(
                     }
                     cursor = end + 1
                     continue
+                } else if (isStreaming) {
+                    // Mid-stream incomplete code block: render code style without leaking raw backtick
+                    val codeSpan = text.substring(cursor + 1)
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = SalimCodeFontFamily,
+                            background = if (isDark) Color(0xFF2B302B) else Color(0xFFE2E7DE),
+                            color = if (isDark) Color(0xFFF1F5F0) else Color(0xFF1E221E),
+                            fontSize = 14.sp
+                        )
+                    ) {
+                        append(" $codeSpan")
+                    }
+                    break
                 }
             }
 
-            // Check inline math: $formula$
+            // Inline math: $formula$
             if (text[cursor] == '$' && cursor + 1 < len && text[cursor + 1] != '$') {
                 val end = text.indexOf('$', cursor + 1)
                 if (end != -1) {
@@ -576,9 +717,40 @@ private fun buildAnnotatedInline(
                 }
             }
 
-            // Check bold: **bold**
-            if (cursor + 1 < len && text.substring(cursor, cursor + 2) == "**") {
-                val end = text.indexOf("**", cursor + 2)
+            // Markdown Links: [label](url)
+            if (text[cursor] == '[') {
+                val closeBracket = text.indexOf(']', cursor + 1)
+                if (closeBracket != -1 && closeBracket + 1 < len && text[closeBracket + 1] == '(') {
+                    val closeParen = text.indexOf(')', closeBracket + 2)
+                    if (closeParen != -1) {
+                        val label = text.substring(cursor + 1, closeBracket)
+                        val url = text.substring(closeBracket + 2, closeParen)
+                        pushStringAnnotation(tag = "URL", annotation = url)
+                        withStyle(
+                            SpanStyle(
+                                color = if (isDark) AccentGold else AccentGreen,
+                                textDecoration = TextDecoration.Underline,
+                                fontWeight = FontWeight.Medium
+                            )
+                        ) {
+                            append(label)
+                        }
+                        pop()
+                        cursor = closeParen + 1
+                        continue
+                    }
+                } else if (isStreaming && closeBracket == -1) {
+                    // Mid-stream incomplete link: render text without raw '['
+                    val partialLabel = text.substring(cursor + 1)
+                    append(partialLabel)
+                    break
+                }
+            }
+
+            // Bold: **bold** or __bold__
+            if (cursor + 1 < len && (text.substring(cursor, cursor + 2) == "**" || text.substring(cursor, cursor + 2) == "__")) {
+                val delim = text.substring(cursor, cursor + 2)
+                val end = text.indexOf(delim, cursor + 2)
                 if (end != -1) {
                     val boldSpan = text.substring(cursor + 2, end)
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = baseColor)) {
@@ -586,32 +758,77 @@ private fun buildAnnotatedInline(
                     }
                     cursor = end + 2
                     continue
+                } else if (isStreaming) {
+                    // Mid-stream incomplete bold: render remaining text bold without raw asterisks
+                    val boldSpan = text.substring(cursor + 2)
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = baseColor)) {
+                        append(boldSpan)
+                    }
+                    break
                 }
             }
 
-            // Check italic: *italic*
-            if (text[cursor] == '*' && (cursor + 1 < len && text[cursor + 1] != '*')) {
-                val end = text.indexOf('*', cursor + 1)
+            // Strikethrough: ~~strikethrough~~
+            if (cursor + 1 < len && text.substring(cursor, cursor + 2) == "~~") {
+                val end = text.indexOf("~~", cursor + 2)
                 if (end != -1) {
+                    val strikeSpan = text.substring(cursor + 2, end)
+                    withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = baseColor.copy(alpha = 0.7f))) {
+                        append(strikeSpan)
+                    }
+                    cursor = end + 2
+                    continue
+                } else if (isStreaming) {
+                    val strikeSpan = text.substring(cursor + 2)
+                    withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = baseColor.copy(alpha = 0.7f))) {
+                        append(strikeSpan)
+                    }
+                    break
+                }
+            }
+
+            // Italic: *italic* or _italic_
+            if ((text[cursor] == '*' || text[cursor] == '_') && (cursor + 1 < len && text[cursor + 1] != text[cursor])) {
+                val delim = text[cursor]
+                val end = text.indexOf(delim, cursor + 1)
+                if (end != -1 && end > cursor + 1) {
                     val italicSpan = text.substring(cursor + 1, end)
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = baseColor)) {
                         append(italicSpan)
                     }
                     cursor = end + 1
                     continue
+                } else if (isStreaming) {
+                    val italicSpan = text.substring(cursor + 1)
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = baseColor)) {
+                        append(italicSpan)
+                    }
+                    break
                 }
             }
 
-            // Regular character
-            append(text[cursor])
+            // Word-level highlighting during TTS
+            val charPosInFull = if (fullContent.isNotEmpty()) fullContent.indexOf(text) + cursor else -1
+            val isSpokenNow = activeWordRange != null && charPosInFull >= 0 &&
+                    charPosInFull >= activeWordRange.first && charPosInFull < activeWordRange.second
+
+            if (isSpokenNow) {
+                withStyle(
+                    SpanStyle(
+                        background = if (isDark) AccentGold.copy(alpha = 0.4f) else AccentGreen.copy(alpha = 0.3f),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                ) {
+                    append(text[cursor])
+                }
+            } else {
+                append(text[cursor])
+            }
             cursor++
         }
     }
 }
 
-/**
- * Transforms common LaTeX math syntax into clean readable mathematical expressions.
- */
 private fun formatLatexToReadable(latex: String): String {
     return latex
         .replace("\\frac{", "(")

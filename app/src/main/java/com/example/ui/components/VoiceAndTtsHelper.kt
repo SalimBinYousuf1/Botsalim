@@ -2,11 +2,13 @@ package com.example.ui.components
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.widget.Toast
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,11 +17,15 @@ import java.util.Locale
 
 class VoiceInputHelper(
     private val context: Context,
-    private val onResult: (String) -> Unit
+    private val onFinalResult: (String) -> Unit
 ) {
     private var recognizer: SpeechRecognizer? = null
     private val _isListening = MutableStateFlow(false)
     val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
+
+    // Live partial transcription stream (Section U.16)
+    private val _liveTranscription = MutableStateFlow("")
+    val liveTranscription: StateFlow<String> = _liveTranscription.asStateFlow()
 
     fun startListening() {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
@@ -28,6 +34,7 @@ class VoiceInputHelper(
         }
 
         stopListening()
+        _liveTranscription.value = ""
 
         recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
             setRecognitionListener(object : RecognitionListener {
@@ -42,18 +49,21 @@ class VoiceInputHelper(
                 }
                 override fun onError(error: Int) {
                     _isListening.value = false
+                    _liveTranscription.value = ""
                 }
                 override fun onResults(results: Bundle?) {
                     _isListening.value = false
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     if (!matches.isNullOrEmpty()) {
-                        onResult(matches[0])
+                        val text = matches[0]
+                        _liveTranscription.value = text
+                        onFinalResult(text)
                     }
                 }
                 override fun onPartialResults(partialResults: Bundle?) {
                     val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     if (!matches.isNullOrEmpty()) {
-                        onResult(matches[0])
+                        _liveTranscription.value = matches[0]
                     }
                 }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -70,6 +80,7 @@ class VoiceInputHelper(
             recognizer?.startListening(intent)
         } catch (e: Exception) {
             _isListening.value = false
+            _liveTranscription.value = ""
         }
     }
 
@@ -93,7 +104,12 @@ class TtsHelper(private val context: Context) : TextToSpeech.OnInitListener {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
-    private var currentPlayingId: String? = null
+    private val _currentPlayingId = MutableStateFlow<String?>(null)
+    val currentPlayingId: StateFlow<String?> = _currentPlayingId.asStateFlow()
+
+    // Word-level highlight range: (startIndex, endIndex) within the message text
+    private val _activeWordRange = MutableStateFlow<Pair<Int, Int>?>(null)
+    val activeWordRange: StateFlow<Pair<Int, Int>?> = _activeWordRange.asStateFlow()
 
     init {
         tts = TextToSpeech(context.applicationContext, this)
@@ -102,6 +118,29 @@ class TtsHelper(private val context: Context) : TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts?.language = Locale.getDefault()
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    _isPlaying.value = true
+                }
+
+                override fun onDone(utteranceId: String?) {
+                    _isPlaying.value = false
+                    _currentPlayingId.value = null
+                    _activeWordRange.value = null
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    _isPlaying.value = false
+                    _currentPlayingId.value = null
+                    _activeWordRange.value = null
+                }
+
+                override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+                    super.onRangeStart(utteranceId, start, end, frame)
+                    _activeWordRange.value = Pair(start, end)
+                }
+            })
             isInitialized = true
         }
     }
@@ -109,22 +148,27 @@ class TtsHelper(private val context: Context) : TextToSpeech.OnInitListener {
     fun speak(id: String, text: String) {
         if (!isInitialized || text.isBlank()) return
 
-        if (currentPlayingId == id && _isPlaying.value) {
+        if (_currentPlayingId.value == id && _isPlaying.value) {
             stop()
             return
         }
 
         stop()
-        currentPlayingId = id
+        _currentPlayingId.value = id
         _isPlaying.value = true
+        _activeWordRange.value = null
 
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+        val params = Bundle().apply {
+            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, id)
+        }
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, id)
     }
 
     fun stop() {
         tts?.stop()
-        currentPlayingId = null
+        _currentPlayingId.value = null
         _isPlaying.value = false
+        _activeWordRange.value = null
     }
 
     fun shutdown() {

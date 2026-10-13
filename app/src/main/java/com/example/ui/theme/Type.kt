@@ -16,6 +16,12 @@ val SalimFontFamily = FontFamily(
     Font(R.font.plus_jakarta_sans, FontWeight.Bold)
 )
 
+// Display serif font family for markdown headings (H1/H2/H3)
+val SalimSerifFontFamily = FontFamily(
+    Font(R.font.lora, FontWeight.Normal),
+    Font(R.font.lora, FontWeight.Bold)
+)
+
 // Monospace font family for syntax-highlighted code blocks
 val SalimCodeFontFamily = FontFamily(
     Font(R.font.jetbrains_mono, FontWeight.Normal),
@@ -24,6 +30,29 @@ val SalimCodeFontFamily = FontFamily(
 
 // Six fixed typography scales for Salim (34, 28, 20, 17, 15, 13sp)
 object SalimTextStyles {
+    val SerifH1 = TextStyle(
+        fontFamily = SalimSerifFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 28.sp,
+        lineHeight = 36.sp,
+        letterSpacing = (-0.3).sp
+    )
+
+    val SerifH2 = TextStyle(
+        fontFamily = SalimSerifFontFamily,
+        fontWeight = FontWeight.Bold,
+        fontSize = 22.sp,
+        lineHeight = 30.sp,
+        letterSpacing = (-0.2).sp
+    )
+
+    val SerifH3 = TextStyle(
+        fontFamily = SalimSerifFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 19.sp,
+        lineHeight = 26.sp,
+        letterSpacing = (-0.1).sp
+    )
     val HeadlineLarge = TextStyle(
         fontFamily = SalimFontFamily,
         fontWeight = FontWeight.Bold,

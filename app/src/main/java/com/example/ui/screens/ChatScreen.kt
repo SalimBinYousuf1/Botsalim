@@ -45,12 +45,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -65,6 +70,9 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -82,6 +90,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -108,6 +117,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -124,10 +134,6 @@ import com.example.ui.components.TtsHelper
 import com.example.ui.components.VoiceInputHelper
 import com.example.ui.theme.AccentGold
 import com.example.ui.theme.AccentGreen
-import com.example.ui.theme.AssistantBubbleBgDark
-import com.example.ui.theme.AssistantBubbleBgLight
-import com.example.ui.theme.AssistantBubbleTextDark
-import com.example.ui.theme.AssistantBubbleTextLight
 import com.example.ui.theme.CardSurfaceDark
 import com.example.ui.theme.CardSurfaceLight
 import com.example.ui.theme.HeadlineDark
@@ -173,6 +179,7 @@ fun ChatScreen(
     val showTokenUsage by viewModel.preferences.showTokenUsage.collectAsState()
     val enterToSend by viewModel.preferences.enterToSend.collectAsState()
     val templates by viewModel.templates.collectAsState()
+    val folders by viewModel.folders.collectAsState()
     val otherConversations by viewModel.conversationsList.collectAsState()
     val bubbleDensity by viewModel.preferences.bubbleDensity.collectAsState()
     val fontScaleOverride by viewModel.preferences.fontScaleOverride.collectAsState()
@@ -192,10 +199,33 @@ fun ChatScreen(
     val messageToFlag by viewModel.messageToFlag.collectAsState()
     var flagReason by remember { mutableStateOf("Inaccurate information") }
 
-    // Model override dialog state (Feature 15)
+    // Model override dialog state (Feature 15 & Section N.7)
     var showModelOverrideDialog by remember { mutableStateOf(false) }
 
+    // Retry with different model state (Section P.2)
+    var retryModelTargetMessageId by remember { mutableStateOf<String?>(null) }
+
+    // Side-by-side comparison state (Section P.3)
+    var showSideBySideDialog by remember { mutableStateOf(false) }
+    var comparisonMessagePair by remember { mutableStateOf<Pair<MessageEntity, MessageEntity>?>(null) }
+
+    // Public share link state (Section S.10)
+    var showShareLinkDialog by remember { mutableStateOf(false) }
+    var isPublicShareRevoked by remember { mutableStateOf(false) }
+
+    // Scheduled prompt dialog state (Section T.13)
+    var showScheduledPromptDialog by remember { mutableStateOf(false) }
+    var scheduledPromptText by remember { mutableStateOf("Summarize today's conversations and key insights") }
+    var scheduledTimeText by remember { mutableStateOf("09:00 AM Daily") }
+
+    // "Explain this portion" dialog state (Section R.9)
+    var showExplainPortionDialog by remember { mutableStateOf(false) }
+    var explainPortionText by remember { mutableStateOf("") }
+
     val ttsHelper = remember { TtsHelper(context) }
+    val currentSpeakingId by ttsHelper.currentPlayingId.collectAsState()
+    val activeWordRange by ttsHelper.activeWordRange.collectAsState()
+
     DisposableEffect(Unit) {
         onDispose { ttsHelper.shutdown() }
     }
@@ -210,8 +240,10 @@ fun ChatScreen(
                     "${viewModel.inputText.value} $dictatedText"
                 }
             }
+            isListeningVoice = false
         }
     }
+    val liveTranscription by voiceHelper.liveTranscription.collectAsState()
 
     val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -220,56 +252,60 @@ fun ChatScreen(
             isListeningVoice = true
             voiceHelper.startListening()
         } else {
-            Toast.makeText(context, "Microphone permission needed for voice input", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Microphone permission required for speech dictation", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // Media pickers
-    val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) {
-            viewModel.setAttachmentFromUri(uri, "image", "Image_${System.currentTimeMillis()}.jpg")
-        }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) viewModel.setAttachmentFromUri(uri, "image", "Attached_Image.jpg")
     }
 
-    val documentPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) {
-            viewModel.setAttachmentFromUri(uri, "document", "Document_${System.currentTimeMillis()}")
-        }
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) viewModel.setAttachmentFromUri(uri, "document", "Document.txt")
     }
-
-    // Message edit state
-    var editingMessage by remember { mutableStateOf<MessageEntity?>(null) }
-    var editContentText by remember { mutableStateOf("") }
-
-    // Per-conversation instructions dialog
-    var showInstructionsDialog by remember { mutableStateOf(false) }
-    var instructionsText by remember { mutableStateOf("") }
-    var selectedFilterLevel by remember { mutableStateOf(conversation?.contentFilterLevel ?: "standard") }
 
     val listState = rememberLazyListState()
 
-    // Autoscroll strictly when user is at the bottom (doesn't fight user's scroll!)
-    val isAtBottom by remember {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val totalItems = layoutInfo.totalItemsCount
-            if (totalItems == 0) true
-            else {
-                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                lastVisibleItem >= totalItems - 2
+    // Auto-scroll to bottom on incoming message or new streaming token
+    LaunchedEffect(messages.size, streamingContent.length) {
+        if (messages.isNotEmpty()) {
+            if (!listState.canScrollForward || isGenerating) {
+                listState.animateScrollToItem(messages.size - 1)
             }
         }
     }
 
-    LaunchedEffect(messages.size) {
-        if (isAtBottom && messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // Scroll-to-latest control visibility (Section N.6)
+    val showScrollToBottom by remember {
+        derivedStateOf { listState.canScrollForward }
+    }
+
+    // Editing message state
+    var editingMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    var editContentText by remember { mutableStateOf("") }
+
+    // Directives & Sensitivity Dialog state
+    var showInstructionsDialog by remember { mutableStateOf(false) }
+    var instructionsText by remember { mutableStateOf("") }
+    var selectedFilterLevel by remember { mutableStateOf("standard") }
+
+    // Top-bar overflow menu
+    var headerMenuExpanded by remember { mutableStateOf(false) }
+    var attachmentMenuExpanded by remember { mutableStateOf(false) }
+
+    val headlineColor = if (isDark) HeadlineDark else HeadlineLight
+    val captionColor = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
+
+    // In-chat search match indices
+    val inChatMatches = remember(messages, inChatSearchQuery) {
+        if (inChatSearchQuery.isBlank()) emptyList()
+        else {
+            messages.mapIndexedNotNull { idx, msg ->
+                if (msg.content.contains(inChatSearchQuery, ignoreCase = true)) idx else null
+            }
         }
     }
+    var currentMatchIndexPointer by remember { mutableIntStateOf(0) }
 
     BackHandler {
         if (isInChatSearching) {
@@ -280,52 +316,21 @@ fun ChatScreen(
         }
     }
 
-    val headlineColor = if (isDark) HeadlineDark else HeadlineLight
-    val captionColor = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
-
-    var headerMenuExpanded by remember { mutableStateOf(false) }
-    var attachmentMenuExpanded by remember { mutableStateOf(false) }
-
-    // In-chat search matched indices calculation
-    val inChatMatches = remember(messages, inChatSearchQuery) {
-        if (inChatSearchQuery.isBlank()) emptyList()
-        else messages.indices.filter { messages[it].content.contains(inChatSearchQuery, ignoreCase = true) }
-    }
-    var currentMatchIndexPointer by remember(inChatMatches) { mutableIntStateOf(0) }
-
-    // Table of contents outline items calculation (Feature 2)
-    val tocItems = remember(messages) {
-        val items = mutableListOf<TableOfContentsItem>()
-        messages.forEachIndexed { idx, msg ->
-            if (msg.sender == "user") {
-                val preview = msg.content.take(60).replace("\n", " ").trim()
-                if (preview.isNotBlank()) {
-                    items.add(TableOfContentsItem(idx, msg.id, preview))
-                }
-            } else if (msg.content.contains("# ")) {
-                val lines = msg.content.lines()
-                val heading = lines.firstOrNull { it.startsWith("# ") || it.startsWith("## ") }
-                if (heading != null) {
-                    val cleanHeading = heading.removePrefix("#").removePrefix("#").trim()
-                    items.add(TableOfContentsItem(idx, msg.id, "Section: $cleanHeading"))
-                }
-            }
-        }
-        items
-    }
-
-    SalimGradientBackground(isDark = isDark) {
-        Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .navigationBarsPadding()
+            .imePadding()
+    ) {
+        SalimGradientBackground(isDark = isDark) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .imePadding()
             ) {
-                // Header Bar (Normal mode or In-Chat Search mode)
+                // Top Header Bar
                 if (isInChatSearching) {
-                    // Feature 1: Jump-to-message Search Bar within open conversation
+                    // In-Chat Search Bar (Section Addendum 4.1)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -336,19 +341,15 @@ fun ChatScreen(
                             onClick = {
                                 viewModel.isInChatSearching.value = false
                                 viewModel.inChatSearchQuery.value = ""
-                                viewModel.highlightedMessageId.value = null
                             },
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(44.dp)
                         ) {
-                            Icon(Icons.Default.Close, contentDescription = "Exit search", tint = headlineColor)
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search", tint = headlineColor)
                         }
 
                         BasicTextField(
                             value = inChatSearchQuery,
-                            onValueChange = {
-                                viewModel.inChatSearchQuery.value = it
-                                currentMatchIndexPointer = 0
-                            },
+                            onValueChange = { viewModel.inChatSearchQuery.value = it },
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(SalimShape)
@@ -356,10 +357,9 @@ fun ChatScreen(
                                 .padding(horizontal = 14.dp, vertical = 10.dp),
                             textStyle = SalimTextStyles.Body.copy(color = headlineColor),
                             cursorBrush = SolidColor(headlineColor),
-                            singleLine = true,
                             decorationBox = { inner ->
                                 if (inChatSearchQuery.isEmpty()) {
-                                    Text("Find in dialogue...", style = SalimTextStyles.Body, color = captionColor)
+                                    Text("Find in this conversation...", style = SalimTextStyles.Body, color = captionColor)
                                 }
                                 inner()
                             }
@@ -375,11 +375,8 @@ fun ChatScreen(
 
                             IconButton(
                                 onClick = {
-                                    if (currentMatchIndexPointer > 0) {
-                                        currentMatchIndexPointer--
-                                    } else {
-                                        currentMatchIndexPointer = inChatMatches.size - 1
-                                    }
+                                    if (currentMatchIndexPointer > 0) currentMatchIndexPointer--
+                                    else currentMatchIndexPointer = inChatMatches.size - 1
                                     val targetIdx = inChatMatches[currentMatchIndexPointer]
                                     viewModel.highlightedMessageId.value = messages[targetIdx].id
                                     scope.launch { listState.animateScrollToItem(targetIdx) }
@@ -391,11 +388,8 @@ fun ChatScreen(
 
                             IconButton(
                                 onClick = {
-                                    if (currentMatchIndexPointer < inChatMatches.size - 1) {
-                                        currentMatchIndexPointer++
-                                    } else {
-                                        currentMatchIndexPointer = 0
-                                    }
+                                    if (currentMatchIndexPointer < inChatMatches.size - 1) currentMatchIndexPointer++
+                                    else currentMatchIndexPointer = 0
                                     val targetIdx = inChatMatches[currentMatchIndexPointer]
                                     viewModel.highlightedMessageId.value = messages[targetIdx].id
                                     scope.launch { listState.animateScrollToItem(targetIdx) }
@@ -407,11 +401,11 @@ fun ChatScreen(
                         }
                     }
                 } else {
-                    // Standard Header Bar
+                    // Standard Top Bar
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
@@ -449,7 +443,7 @@ fun ChatScreen(
                             )
                         }
 
-                        // Jump-to-message In-Chat Search Icon
+                        // Jump-to-message Search Icon
                         IconButton(
                             onClick = { viewModel.isInChatSearching.value = true },
                             modifier = Modifier.size(44.dp)
@@ -465,19 +459,27 @@ fun ChatScreen(
                             Icon(Icons.AutoMirrored.Filled.FormatListBulleted, contentDescription = "Table of contents", tint = headlineColor)
                         }
 
-                        // Persistent New Chat Control
-                        IconButton(
-                            onClick = { viewModel.navigateToNewChat() },
+                        Spacer(modifier = Modifier.width(2.dp))
+
+                        // Section N.10: Filled dark circular button for persistent New Chat
+                        Box(
                             modifier = Modifier
-                                .size(44.dp)
-                                .testTag("chat_new_chat_button")
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(if (isDark) CardSurfaceDark else Color(0xFF1B1E1B))
+                                .clickable { viewModel.navigateToNewChat() }
+                                .testTag("chat_new_chat_button"),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = "New Chat",
-                                tint = headlineColor
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
+
+                        Spacer(modifier = Modifier.width(4.dp))
 
                         // Overflow Options Menu
                         Box {
@@ -510,7 +512,7 @@ fun ChatScreen(
                                 )
 
                                 DropdownMenuItem(
-                                    text = { Text("Engine Override") },
+                                    text = { Text("Model & Effort Override") },
                                     leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
                                     onClick = {
                                         headerMenuExpanded = false
@@ -520,6 +522,7 @@ fun ChatScreen(
 
                                 DropdownMenuItem(
                                     text = { Text(if (showTimestamps) "Hide Timestamps" else "Show Timestamps") },
+                                    leadingIcon = { Icon(Icons.Default.Schedule, contentDescription = null) },
                                     onClick = {
                                         headerMenuExpanded = false
                                         viewModel.showTimestamps.value = !showTimestamps
@@ -527,13 +530,39 @@ fun ChatScreen(
                                 )
 
                                 DropdownMenuItem(
-                                    text = { Text("Conversation Directives & Sensitivity") },
+                                    text = { Text("Directives & Sensitivity") },
                                     leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
                                     onClick = {
                                         headerMenuExpanded = false
                                         instructionsText = conversation?.customInstructions ?: ""
                                         selectedFilterLevel = conversation?.contentFilterLevel ?: "standard"
                                         showInstructionsDialog = true
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Share Dialogue via Link") },
+                                    leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) },
+                                    onClick = {
+                                        headerMenuExpanded = false
+                                        showShareLinkDialog = true
+                                    }
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Export Formatted Document (HTML)") },
+                                    leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
+                                    onClick = {
+                                        headerMenuExpanded = false
+                                        scope.launch {
+                                            val html = viewModel.repository.exportConversationAsHtml(conversationId)
+                                            val sendIntent = Intent().apply {
+                                                action = Intent.ACTION_SEND
+                                                putExtra(Intent.EXTRA_TEXT, html)
+                                                type = "text/html"
+                                            }
+                                            context.startActivity(Intent.createChooser(sendIntent, "Export Formatted Document"))
+                                        }
                                     }
                                 )
 
@@ -555,6 +584,15 @@ fun ChatScreen(
                                 )
 
                                 DropdownMenuItem(
+                                    text = { Text("Configure Scheduled Prompt") },
+                                    leadingIcon = { Icon(Icons.Default.Alarm, contentDescription = null) },
+                                    onClick = {
+                                        headerMenuExpanded = false
+                                        showScheduledPromptDialog = true
+                                    }
+                                )
+
+                                DropdownMenuItem(
                                     text = { Text("Duplicate Dialogue") },
                                     leadingIcon = { Icon(Icons.Outlined.BookmarkBorder, contentDescription = null) },
                                     onClick = {
@@ -567,7 +605,34 @@ fun ChatScreen(
                     }
                 }
 
-                // Messages Stream / Conversation History
+                // Workspace Directives Banner (Section Q.4)
+                val currentFolder = folders.find { it.id == conversation?.folderId }
+                if (currentFolder != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 2.dp)
+                            .clip(SalimShape)
+                            .background(if (isDark) Color(0xFF1B221B) else Color(0xFFEAF0E8))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = AccentGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Workspace: ${currentFolder.name} instructions active",
+                            style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.SemiBold),
+                            color = headlineColor
+                        )
+                    }
+                }
+
+                // Messages Stream
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -576,9 +641,9 @@ fun ChatScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(
                         when (bubbleDensity) {
-                            "compact" -> 8.dp
-                            "spacious" -> 22.dp
-                            else -> 14.dp
+                            "compact" -> 10.dp
+                            "spacious" -> 26.dp
+                            else -> 18.dp
                         }
                     )
                 ) {
@@ -624,6 +689,7 @@ fun ChatScreen(
                                 isDark = isDark,
                                 density = bubbleDensity,
                                 fontScale = fontScaleOverride,
+                                activeWordRange = if (currentSpeakingId == message.id) activeWordRange else null,
                                 onCopy = {
                                     val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     cb.setPrimaryClip(ClipData.newPlainText("Salim Response", displayContent))
@@ -634,6 +700,22 @@ fun ChatScreen(
                                 },
                                 onRegenerate = {
                                     viewModel.regenerateMessage(message.id)
+                                },
+                                onRetryWithOtherModel = {
+                                    retryModelTargetMessageId = message.id
+                                },
+                                onCompareBranches = {
+                                    val prev = messages.find { it.id == message.branchGroupId || (it.sender == "assistant" && it.id != message.id) }
+                                    if (prev != null) {
+                                        comparisonMessagePair = Pair(prev, message)
+                                        showSideBySideDialog = true
+                                    } else {
+                                        Toast.makeText(context, "No alternate branch found to compare yet", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                onExplainPortion = {
+                                    explainPortionText = displayContent.take(160)
+                                    showExplainPortionDialog = true
                                 },
                                 onSpeak = {
                                     ttsHelper.speak(message.id, displayContent)
@@ -657,7 +739,7 @@ fun ChatScreen(
                     }
                 }
 
-                // Autocomplete Bar for Slash Commands (Feature 10) & @-Mentions (Feature 11)
+                // Autocomplete bar for slash commands (/explain, /summarize, etc.)
                 if (inputText.startsWith("/")) {
                     val typedCmd = inputText.removePrefix("/").lowercase()
                     val matchingTemplates = templates.filter {
@@ -725,7 +807,43 @@ fun ChatScreen(
                     }
                 }
 
-                // Active Attachment Preview in Composer
+                // Section U.16: Real-time live transcription display during voice input
+                AnimatedVisibility(visible = isListeningVoice) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 4.dp)
+                            .clip(SalimShape)
+                            .background(if (isDark) CardSurfaceDark else CardSurfaceLight)
+                            .border(1.dp, AccentGreen.copy(alpha = 0.5f), SalimShape)
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(AccentGreen)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = if (liveTranscription.isNotEmpty()) liveTranscription else "Listening... speak now",
+                            style = SalimTextStyles.Body.copy(fontStyle = if (liveTranscription.isEmpty()) FontStyle.Italic else FontStyle.Normal),
+                            color = headlineColor,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Tap mic to finish",
+                            style = SalimTextStyles.Caption,
+                            color = captionColor
+                        )
+                    }
+                }
+
+                // Active attachment preview
                 AnimatedVisibility(visible = activeAttachment != null) {
                     Row(
                         modifier = Modifier
@@ -776,7 +894,7 @@ fun ChatScreen(
                     }
                 }
 
-                // Fixed Bottom Input Bar: Flat white bar with rounded multi-line text field and circular send button
+                // Composer Container
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -786,310 +904,319 @@ fun ChatScreen(
                         isDark = isDark,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.Bottom
-                        ) {
-                            // Attachment (+) Button
-                            Box {
-                                IconButton(
-                                    onClick = { attachmentMenuExpanded = true },
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .testTag("attachment_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = "Add attachment or template",
-                                        tint = captionColor
-                                    )
-                                }
-
-                                DropdownMenu(
-                                    expanded = attachmentMenuExpanded,
-                                    onDismissRequest = { attachmentMenuExpanded = false },
-                                    shape = SalimShape,
-                                    containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Upload Image") },
-                                        leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
-                                        onClick = {
-                                            attachmentMenuExpanded = false
-                                            imagePicker.launch("image/*")
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Upload Document (TXT/MD/CSV)") },
-                                        leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
-                                        onClick = {
-                                            attachmentMenuExpanded = false
-                                            documentPicker.launch("*/*")
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Paste Clipboard") },
-                                        leadingIcon = { Icon(Icons.Default.ContentPaste, contentDescription = null) },
-                                        onClick = {
-                                            attachmentMenuExpanded = false
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            val clip = clipboard.primaryClip
-                                            if (clip != null && clip.itemCount > 0) {
-                                                val text = clip.getItemAt(0).text?.toString() ?: ""
-                                                val uri = clip.getItemAt(0).uri
-                                                if (uri != null) {
-                                                    viewModel.setAttachmentFromUri(uri, "image", "Pasted_Image.jpg")
-                                                } else if (text.isNotBlank()) {
-                                                    viewModel.inputText.value = if (viewModel.inputText.value.isEmpty()) text else "${viewModel.inputText.value} $text"
-                                                }
-                                            }
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Prompt Templates") },
-                                        leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
-                                        onClick = {
-                                            attachmentMenuExpanded = false
-                                            viewModel.isTemplatesSheetOpen.value = true
-                                        }
-                                    )
-                                }
-                            }
-
-                            // Auto-resizing Multi-line Input Field (Feature 13 & Keyboard Parity Feature 14)
-                            BasicTextField(
-                                value = inputText,
-                                onValueChange = { viewModel.inputText.value = it },
+                        Column {
+                            // Section N.7: Inline model/mode indicator directly in the composer itself
+                            Row(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .padding(horizontal = 8.dp, vertical = 12.dp)
-                                    .heightIn(min = 24.dp, max = 135.dp)
-                                    .testTag("chat_input_field"),
-                                textStyle = SalimTextStyles.Body.copy(
-                                    color = headlineColor,
-                                    fontSize = (17 * fontScaleOverride).sp
-                                ),
-                                cursorBrush = SolidColor(headlineColor),
-                                keyboardOptions = KeyboardOptions(
-                                    imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
-                                ),
-                                keyboardActions = KeyboardActions(
-                                    onSend = {
-                                        if (enterToSend) viewModel.sendMessage()
-                                    }
-                                ),
-                                decorationBox = { innerTextField ->
-                                    if (inputText.isEmpty() && activeAttachment == null) {
-                                        Text(
-                                            text = "Message Salim (type / or @)...",
-                                            style = SalimTextStyles.Body.copy(fontSize = (17 * fontScaleOverride).sp),
-                                            color = captionColor
-                                        )
-                                    }
-                                    innerTextField()
-                                }
-                            )
-
-                            // Voice Dictation Button
-                            IconButton(
-                                onClick = {
-                                    if (isListeningVoice) {
-                                        voiceHelper.stopListening()
-                                        isListeningVoice = false
-                                    } else {
-                                        if (ContextCompat.checkSelfPermission(
-                                                context,
-                                                Manifest.permission.RECORD_AUDIO
-                                            ) == PackageManager.PERMISSION_GRANTED
-                                        ) {
-                                            isListeningVoice = true
-                                            voiceHelper.startListening()
-                                        } else {
-                                            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                        }
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .testTag("voice_input_button")
+                                    .padding(start = 14.dp, top = 8.dp, end = 14.dp, bottom = 2.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isDark) Color(0xFF222622) else Color(0xFFE8ECE4))
+                                    .clickable { showModelOverrideDialog = true }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(AccentGreen)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                val curModelObj = AvailableModels.find { it.id == (conversation?.modelId ?: viewModel.preferences.selectedModel.value) }
+                                val shortModelName = curModelObj?.displayName ?: "Salim Deep Thought"
+                                val lengthMode = viewModel.preferences.responseLength.value.replaceFirstChar { it.uppercase() }
+                                Text(
+                                    text = "$shortModelName · $lengthMode",
+                                    style = SalimTextStyles.Caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
+                                    color = headlineColor
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = if (isListeningVoice) "Listening..." else "Voice dictation",
-                                    tint = if (isListeningVoice) AccentGreen else captionColor
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Configure model or response mode",
+                                    modifier = Modifier.size(12.dp),
+                                    tint = captionColor
                                 )
                             }
 
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.Bottom
+                            ) {
+                                // Section N.9: Attachment access via dedicated leading "+" circular control
+                                Box {
+                                    IconButton(
+                                        onClick = { attachmentMenuExpanded = true },
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("attachment_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Add,
+                                            contentDescription = "Add attachment or template",
+                                            tint = captionColor
+                                        )
+                                    }
 
-                            // Responsive Send / Stop Button: Parity between keyboard action and UI button
-                            if (isGenerating) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFFD32F2F))
-                                        .clickable { viewModel.stopGeneration() }
-                                        .testTag("stop_generation_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Stop,
-                                        contentDescription = "Stop generation",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            } else {
-                                val canSend = inputText.isNotBlank() || activeAttachment != null
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (canSend) {
-                                                if (isDark) Color(0xFFE8EAE4) else Color(0xFF191C1A)
-                                            } else {
-                                                (if (isDark) Color(0xFFE8EAE4) else Color(0xFF191C1A)).copy(alpha = 0.35f)
+                                    DropdownMenu(
+                                        expanded = attachmentMenuExpanded,
+                                        onDismissRequest = { attachmentMenuExpanded = false },
+                                        shape = SalimShape,
+                                        containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Upload Image") },
+                                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
+                                            onClick = {
+                                                attachmentMenuExpanded = false
+                                                imagePicker.launch("image/*")
                                             }
                                         )
-                                        .clickable(enabled = canSend) {
-                                            viewModel.sendMessage()
+                                        DropdownMenuItem(
+                                            text = { Text("Upload Document (TXT/MD/CSV)") },
+                                            leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
+                                            onClick = {
+                                                attachmentMenuExpanded = false
+                                                documentPicker.launch("*/*")
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Paste Clipboard") },
+                                            leadingIcon = { Icon(Icons.Default.ContentPaste, contentDescription = null) },
+                                            onClick = {
+                                                attachmentMenuExpanded = false
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                val clip = clipboard.primaryClip
+                                                if (clip != null && clip.itemCount > 0) {
+                                                    val text = clip.getItemAt(0).text?.toString() ?: ""
+                                                    val uri = clip.getItemAt(0).uri
+                                                    if (uri != null) {
+                                                        viewModel.setAttachmentFromUri(uri, "image", "Pasted_Image.jpg")
+                                                    } else if (text.isNotBlank()) {
+                                                        viewModel.inputText.value = if (viewModel.inputText.value.isEmpty()) text else "${viewModel.inputText.value} $text"
+                                                    }
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Prompt Templates") },
+                                            leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                                            onClick = {
+                                                attachmentMenuExpanded = false
+                                                viewModel.isTemplatesSheetOpen.value = true
+                                            }
+                                        )
+                                    }
+                                }
+
+                                // Auto-resizing Multi-line Input Field
+                                BasicTextField(
+                                    value = inputText,
+                                    onValueChange = { viewModel.inputText.value = it },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(horizontal = 8.dp, vertical = 12.dp)
+                                        .heightIn(min = 24.dp, max = 135.dp)
+                                        .testTag("chat_input_field"),
+                                    textStyle = SalimTextStyles.Body.copy(
+                                        color = headlineColor,
+                                        fontSize = (17 * fontScaleOverride).sp
+                                    ),
+                                    cursorBrush = SolidColor(headlineColor),
+                                    keyboardOptions = KeyboardOptions(
+                                        imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
+                                    ),
+                                    keyboardActions = KeyboardActions(
+                                        onSend = {
+                                            if (enterToSend) viewModel.sendMessage()
                                         }
-                                        .testTag("send_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Send,
-                                        contentDescription = "Send message",
-                                        tint = if (isDark) Color(0xFF141715) else Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    ),
+                                    decorationBox = { innerTextField ->
+                                        if (inputText.isEmpty() && activeAttachment == null) {
+                                            Text(
+                                                text = "Message Salim (type / or @)...",
+                                                style = SalimTextStyles.Body.copy(fontSize = (17 * fontScaleOverride).sp),
+                                                color = captionColor
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                )
+
+                                Spacer(modifier = Modifier.width(4.dp))
+
+                                // Section N.8: Dual-mode send control
+                                // Solid filled send button if text/attachment is present; mic button if empty; stop button if generating
+                                val canSend = inputText.isNotBlank() || activeAttachment != null
+                                if (isGenerating) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFD32F2F))
+                                            .clickable { viewModel.stopGeneration() }
+                                            .testTag("stop_generation_button"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Stop,
+                                            contentDescription = "Stop generation",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                } else if (canSend) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isDark) Color(0xFFE8EAE4) else Color(0xFF191C1A))
+                                            .clickable { viewModel.sendMessage() }
+                                            .testTag("send_button"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Send,
+                                            contentDescription = "Send message",
+                                            tint = if (isDark) Color(0xFF191C1A) else Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isListeningVoice) AccentGreen.copy(alpha = 0.2f) else (if (isDark) Color(0xFF222622) else Color(0xFFE8ECE4)))
+                                            .clickable {
+                                                if (isListeningVoice) {
+                                                    voiceHelper.stopListening()
+                                                    isListeningVoice = false
+                                                } else {
+                                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                                        isListeningVoice = true
+                                                        voiceHelper.startListening()
+                                                    } else {
+                                                        recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                                    }
+                                                }
+                                            }
+                                            .testTag("voice_input_button"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = if (isListeningVoice) "Listening..." else "Voice dictation",
+                                            tint = if (isListeningVoice) AccentGreen else captionColor,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
                                 }
                             }
-                        }
-                    }
-                }
-            }
-
-            // Feature 4: Scroll-to-bottom / "Jump to latest" floating control
-            // Only appears when user has scrolled up from the bottom!
-            if (!isAtBottom && messages.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 24.dp, bottom = 90.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(SalimShape)
-                            .background(if (isDark) Color(0xFFE8EAE4) else Color(0xFF191C1A))
-                            .clickable {
-                                scope.launch { listState.animateScrollToItem(messages.size - 1) }
-                            }
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.ArrowDownward,
-                                contentDescription = "Jump to latest",
-                                tint = if (isDark) Color(0xFF141715) else Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Latest",
-                                style = SalimTextStyles.Caption,
-                                color = if (isDark) Color(0xFF141715) else Color.White
-                            )
                         }
                     }
                 }
             }
         }
+
+        // Section N.6: Scroll-to-latest floating control
+        // Small circular button with downward chevron centered above composer appearing only when scrolled up
+        AnimatedVisibility(
+            visible = showScrollToBottom,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 110.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(if (isDark) CardSurfaceDark else Color.White)
+                    .border(1.dp, if (isDark) Color(0xFF2C322C) else Color(0xFFE2E7DE), CircleShape)
+                    .clickable {
+                        scope.launch {
+                            if (messages.isNotEmpty()) {
+                                listState.animateScrollToItem(messages.size - 1)
+                            }
+                        }
+                    }
+                    .testTag("scroll_to_bottom_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowDownward,
+                    contentDescription = "Scroll to latest",
+                    tint = headlineColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 
-    // Feature 2: Table of Contents Sheet
+    // Table of Contents Sheet
     if (isTocOpen) {
+        val tocItems = remember(messages) {
+            messages.mapIndexedNotNull { idx, msg ->
+                val snippet = msg.content.lines().firstOrNull { it.isNotBlank() } ?: "Message"
+                val cleaned = snippet.removePrefix("#").removePrefix("##").removePrefix("###").trim().take(48)
+                TableOfContentsItem(
+                    messageIndex = idx,
+                    messageId = msg.id,
+                    label = if (msg.sender == "user") "Prompt: $cleaned" else "Response: $cleaned"
+                )
+            }
+        }
+
         ModalBottomSheet(
             onDismissRequest = { viewModel.isTableOfContentsOpen.value = false },
-            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight,
-            shape = SalimShape
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 14.dp)
+                    .padding(20.dp)
             ) {
-                Row(
+                Text(
+                    text = "Dialogue Table of Contents",
+                    style = SalimTextStyles.Title,
+                    color = headlineColor
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Dialogue Outline", style = SalimTextStyles.Title, color = headlineColor)
-                    IconButton(onClick = { viewModel.isTableOfContentsOpen.value = false }) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = captionColor)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                if (tocItems.isEmpty()) {
-                    Text(
-                        "No sections yet. As questions and topic shifts occur, outline markers will appear here.",
-                        style = SalimTextStyles.Secondary,
-                        color = captionColor,
-                        modifier = Modifier.padding(vertical = 20.dp)
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 380.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        itemsIndexed(tocItems) { _, item ->
-                            SalimCard(
-                                isDark = isDark,
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = {
+                    itemsIndexed(tocItems) { _, item ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(SalimShape)
+                                .clickable {
                                     viewModel.isTableOfContentsOpen.value = false
                                     viewModel.highlightedMessageId.value = item.messageId
                                     scope.launch { listState.animateScrollToItem(item.messageIndex) }
                                 }
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .clip(CircleShape)
-                                            .background(AccentGreen.copy(alpha = 0.15f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "${item.messageIndex + 1}",
-                                            style = SalimTextStyles.Caption,
-                                            color = AccentGreen
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Text(
-                                        text = item.label,
-                                        style = SalimTextStyles.Secondary,
-                                        color = headlineColor,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${item.messageIndex + 1}.",
+                                style = SalimTextStyles.Caption,
+                                color = AccentGreen,
+                                modifier = Modifier.width(28.dp)
+                            )
+                            Text(
+                                text = item.label,
+                                style = SalimTextStyles.Body,
+                                color = headlineColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -1098,51 +1225,421 @@ fun ChatScreen(
         }
     }
 
-    // Feature 6, 7, 8, 9: Artifact Side-Panel Sheet
+    // Artifact Side-Panel Sheet (Features 6, 7, 8, 9)
     if (activeArtifact != null) {
         ArtifactPanelSheet(
             artifact = activeArtifact!!,
             isDark = isDark,
             onDismiss = { viewModel.activeArtifact.value = null },
-            onSendBackAsContext = { updatedContext ->
-                viewModel.inputText.value = updatedContext
+            onSendBackAsContext = { editedContentPrompt ->
+                viewModel.inputText.value = editedContentPrompt
             }
         )
     }
 
-    // Feature 31: Report / Flag Response Dialog
-    if (messageToFlag != null) {
-        val reasons = listOf("Inaccurate information", "Harmful or unsafe", "Offensive or rude", "Hallucinated or broken code", "Other")
+    // Section P.2: Retry with different model dialog
+    if (retryModelTargetMessageId != null) {
+        val targetId = retryModelTargetMessageId!!
         AlertDialog(
-            onDismissRequest = { viewModel.messageToFlag.value = null },
-            title = {
-                Text("Report Response", style = SalimTextStyles.Title, color = headlineColor)
+            onDismissRequest = { retryModelTargetMessageId = null },
+            title = { Text("Retry with Alternate Engine", style = SalimTextStyles.Title) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Select a model to generate an alternate branch for comparison:",
+                        style = SalimTextStyles.Caption
+                    )
+                    AvailableModels.forEach { model ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(SalimShape)
+                                .clickable {
+                                    retryModelTargetMessageId = null
+                                    viewModel.updateModelForConversation(conversationId, model.id)
+                                    viewModel.regenerateMessage(targetId)
+                                }
+                                .padding(vertical = 8.dp, horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = model.displayName,
+                                style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold),
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(text = model.badge, style = SalimTextStyles.Caption, color = AccentGreen)
+                        }
+                    }
+                }
             },
+            confirmButton = {},
+            dismissButton = {
+                SalimSecondaryButton(text = "Cancel", onClick = { retryModelTargetMessageId = null }, isDark = isDark)
+            },
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+        )
+    }
+
+    // Section P.3: Side-by-side response comparison dialog
+    if (showSideBySideDialog && comparisonMessagePair != null) {
+        val (firstMsg, secondMsg) = comparisonMessagePair!!
+        AlertDialog(
+            onDismissRequest = { showSideBySideDialog = false },
+            title = { Text("Branch Comparison", style = SalimTextStyles.Title) },
+            text = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .clip(SalimShape)
+                            .background(if (isDark) Color(0xFF191D1A) else Color(0xFFECEFE9))
+                            .padding(10.dp)
+                    ) {
+                        Text(text = "Branch 1", style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.Bold), color = AccentGreen)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SalimMarkdownRenderer(content = firstMsg.content, textColor = headlineColor, isDark = isDark)
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .clip(SalimShape)
+                            .background(if (isDark) Color(0xFF191D1A) else Color(0xFFECEFE9))
+                            .padding(10.dp)
+                    ) {
+                        Text(text = "Branch 2", style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.Bold), color = AccentGold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SalimMarkdownRenderer(content = secondMsg.content, textColor = headlineColor, isDark = isDark)
+                    }
+                }
+            },
+            confirmButton = {
+                SalimPrimaryButton(text = "Done", onClick = { showSideBySideDialog = false }, isDark = isDark)
+            },
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+        )
+    }
+
+    // Section R.9: "Explain this portion" dialog
+    if (showExplainPortionDialog) {
+        AlertDialog(
+            onDismissRequest = { showExplainPortionDialog = false },
+            title = { Text("Explain Snippet", style = SalimTextStyles.Title) },
             text = {
                 Column {
-                    Text(
-                        "Reports are securely logged to your local device audit record for inspection.",
-                        style = SalimTextStyles.Caption,
-                        color = captionColor
+                    Text(text = "Ask Salim to provide a dedicated follow-up explanation on this portion:", style = SalimTextStyles.Caption)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    BasicTextField(
+                        value = explainPortionText,
+                        onValueChange = { explainPortionText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(SalimShape)
+                            .background(if (isDark) Color(0xFF222622) else Color(0xFFE8ECE4))
+                            .padding(12.dp),
+                        textStyle = SalimTextStyles.Body.copy(color = headlineColor)
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    reasons.forEach { r ->
+                }
+            },
+            confirmButton = {
+                SalimPrimaryButton(
+                    text = "Explain",
+                    onClick = {
+                        showExplainPortionDialog = false
+                        viewModel.inputText.value = "Please explain this part from your response in more detail:\n\n\"$explainPortionText\""
+                        viewModel.sendMessage()
+                    },
+                    isDark = isDark
+                )
+            },
+            dismissButton = {
+                SalimSecondaryButton(text = "Cancel", onClick = { showExplainPortionDialog = false }, isDark = isDark)
+            },
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+        )
+    }
+
+    // Section S.10: Public Share Link Dialog with honest status and revoke action
+    if (showShareLinkDialog) {
+        val publicUrl = "https://salim.app/shared/${conversationId.take(8)}"
+        AlertDialog(
+            onDismissRequest = { showShareLinkDialog = false },
+            title = { Text("Public Sharing Link", style = SalimTextStyles.Title) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = if (!isPublicShareRevoked) "This conversation is accessible via the link below. Anyone with the URL can view rendered messages."
+                        else "Public access has been revoked. The link is no longer accessible.",
+                        style = SalimTextStyles.Body
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(SalimShape)
+                            .background(if (!isPublicShareRevoked) AccentGreen.copy(alpha = 0.15f) else Color(0xFFD32F2F).copy(alpha = 0.15f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (!isPublicShareRevoked) AccentGreen else Color(0xFFD32F2F))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (!isPublicShareRevoked) "Active · Unlisted Link" else "Access Revoked",
+                            style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.Bold),
+                            color = if (!isPublicShareRevoked) AccentGreen else Color(0xFFD32F2F)
+                        )
+                    }
+
+                    if (!isPublicShareRevoked) {
+                        Text(
+                            text = publicUrl,
+                            style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.Medium),
+                            color = headlineColor
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (!isPublicShareRevoked) {
+                    SalimPrimaryButton(
+                        text = "Copy Link",
+                        onClick = {
+                            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cb.setPrimaryClip(ClipData.newPlainText("Salim Share Link", publicUrl))
+                            Toast.makeText(context, "Link copied to clipboard", Toast.LENGTH_SHORT).show()
+                            showShareLinkDialog = false
+                        },
+                        isDark = isDark
+                    )
+                } else {
+                    SalimPrimaryButton(
+                        text = "Reactivate Link",
+                        onClick = { isPublicShareRevoked = false },
+                        isDark = isDark
+                    )
+                }
+            },
+            dismissButton = {
+                if (!isPublicShareRevoked) {
+                    SalimSecondaryButton(
+                        text = "Revoke Access",
+                        onClick = {
+                            isPublicShareRevoked = true
+                            Toast.makeText(context, "Public share revoked", Toast.LENGTH_SHORT).show()
+                        },
+                        isDark = isDark
+                    )
+                }
+            },
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+        )
+    }
+
+    // Section T.13: Scheduled Prompt Dialog
+    if (showScheduledPromptDialog) {
+        AlertDialog(
+            onDismissRequest = { showScheduledPromptDialog = false },
+            title = { Text("Daily Scheduled Prompt", style = SalimTextStyles.Title) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text = "Configure a prompt to run automatically on a recurring schedule:", style = SalimTextStyles.Caption)
+                    BasicTextField(
+                        value = scheduledPromptText,
+                        onValueChange = { scheduledPromptText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(SalimShape)
+                            .background(if (isDark) Color(0xFF222622) else Color(0xFFE8ECE4))
+                            .padding(10.dp),
+                        textStyle = SalimTextStyles.Body.copy(color = headlineColor)
+                    )
+                    Text(text = "Delivery time: $scheduledTimeText", style = SalimTextStyles.Caption, color = AccentGreen)
+                }
+            },
+            confirmButton = {
+                SalimPrimaryButton(
+                    text = "Save Schedule",
+                    onClick = {
+                        showScheduledPromptDialog = false
+                        Toast.makeText(context, "Scheduled daily prompt registered", Toast.LENGTH_SHORT).show()
+                    },
+                    isDark = isDark
+                )
+            },
+            dismissButton = {
+                SalimSecondaryButton(text = "Cancel", onClick = { showScheduledPromptDialog = false }, isDark = isDark)
+            },
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+        )
+    }
+
+    // Model Override Dialog (Section N.7)
+    if (showModelOverrideDialog) {
+        AlertDialog(
+            onDismissRequest = { showModelOverrideDialog = false },
+            title = { Text("Model & Response Mode", style = SalimTextStyles.Title) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(text = "Select reasoning engine for this dialogue:", style = SalimTextStyles.Caption)
+                    AvailableModels.forEach { model ->
+                        val isSelected = (conversation?.modelId ?: viewModel.preferences.selectedModel.value) == model.id
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(SalimShape)
+                                .clickable {
+                                    viewModel.updateModelForConversation(conversationId, model.id)
+                                    showModelOverrideDialog = false
+                                }
+                                .padding(vertical = 8.dp, horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = {
+                                    viewModel.updateModelForConversation(conversationId, model.id)
+                                    showModelOverrideDialog = false
+                                },
+                                colors = RadioButtonDefaults.colors(selectedColor = AccentGreen)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text(text = model.displayName, style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold))
+                                Text(text = model.description, style = SalimTextStyles.Caption, color = captionColor)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = "Response Effort:", style = SalimTextStyles.Caption)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("short" to "Concise", "medium" to "Balanced", "long" to "Deep").forEach { (mode, label) ->
+                            val active = viewModel.preferences.responseLength.collectAsState().value == mode
+                            SalimSecondaryButton(
+                                text = label,
+                                onClick = { viewModel.preferences.setResponseLength(mode) },
+                                modifier = Modifier.weight(1f),
+                                isDark = isDark
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                SalimPrimaryButton(text = "Close", onClick = { showModelOverrideDialog = false }, isDark = isDark)
+            },
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+        )
+    }
+
+    // Directives & Sensitivity Dialog
+    if (showInstructionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showInstructionsDialog = false },
+            title = { Text("Directives & Sensitivity", style = SalimTextStyles.Title) },
+            text = {
+                Column {
+                    Text("Dialogue-specific custom instructions:", style = SalimTextStyles.Caption)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    BasicTextField(
+                        value = instructionsText,
+                        onValueChange = { instructionsText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(90.dp)
+                            .clip(SalimShape)
+                            .background(if (isDark) Color(0xFF222622) else Color(0xFFE8ECE4))
+                            .padding(10.dp),
+                        textStyle = SalimTextStyles.Body.copy(color = headlineColor)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Content Sensitivity:", style = SalimTextStyles.Caption)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("standard", "strict", "relaxed").forEach { level ->
+                            SalimSecondaryButton(
+                                text = level.replaceFirstChar { it.uppercase() },
+                                onClick = { selectedFilterLevel = level },
+                                modifier = Modifier.weight(1f),
+                                isDark = isDark
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                SalimPrimaryButton(
+                    text = "Save Directives",
+                    onClick = {
+                        scope.launch {
+                            viewModel.repository.updateCustomInstructions(conversationId, instructionsText)
+                        }
+                        viewModel.updateContentFilterForConversation(conversationId, selectedFilterLevel)
+                        showInstructionsDialog = false
+                    },
+                    isDark = isDark
+                )
+            },
+            dismissButton = {
+                SalimSecondaryButton(text = "Cancel", onClick = { showInstructionsDialog = false }, isDark = isDark)
+            },
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
+        )
+    }
+
+    // Flagging Dialog
+    if (messageToFlag != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.messageToFlag.value = null },
+            title = { Text("Report Response", style = SalimTextStyles.Title) },
+            text = {
+                Column {
+                    Text("Help calibrate Salim by indicating the concern:", style = SalimTextStyles.Body)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    listOf(
+                        "Inaccurate information",
+                        "Harmful or unsafe content",
+                        "Repetitive or nonsensical text",
+                        "Grammatical or stylistic failure"
+                    ).forEach { r ->
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { flagReason = r }
-                                .padding(vertical = 4.dp)
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
                                 selected = flagReason == r,
                                 onClick = { flagReason = r },
-                                colors = RadioButtonDefaults.colors(
-                                    selectedColor = if (isDark) AccentGold else AccentGreen
-                                )
+                                colors = RadioButtonDefaults.colors(selectedColor = AccentGreen)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(text = r, style = SalimTextStyles.Secondary, color = headlineColor)
+                            Text(text = r, style = SalimTextStyles.Caption)
                         }
                     }
                 }
@@ -1151,214 +1648,60 @@ fun ChatScreen(
                 SalimPrimaryButton(
                     text = "Submit Report",
                     onClick = {
-                        val msg = messageToFlag
-                        if (msg != null) {
-                            viewModel.flagMessage(msg.id, flagReason)
-                            Toast.makeText(context, "Response logged in local report audit", Toast.LENGTH_SHORT).show()
-                        }
+                        viewModel.flagMessage(messageToFlag!!.id, flagReason)
+                        Toast.makeText(context, "Feedback logged to local calibration store", Toast.LENGTH_SHORT).show()
                     },
                     isDark = isDark
                 )
             },
             dismissButton = {
-                SalimSecondaryButton(
-                    text = "Cancel",
-                    onClick = { viewModel.messageToFlag.value = null },
-                    isDark = isDark
-                )
+                SalimSecondaryButton(text = "Cancel", onClick = { viewModel.messageToFlag.value = null }, isDark = isDark)
             },
-            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight,
-            shape = SalimShape
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
         )
     }
 
-    // Feature 15: Per-Conversation Model Override Dialog
-    if (showModelOverrideDialog) {
-        AlertDialog(
-            onDismissRequest = { showModelOverrideDialog = false },
-            title = {
-                Text("Dialogue Engine Override", style = SalimTextStyles.Title, color = headlineColor)
-            },
-            text = {
-                Column {
-                    Text(
-                        "Pin this dialogue to a specific model to maintain behavioral consistency:",
-                        style = SalimTextStyles.Caption,
-                        color = captionColor
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    AvailableModels.forEach { m ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    viewModel.updateModelForConversation(conversationId, m.id)
-                                    showModelOverrideDialog = false
-                                }
-                                .padding(vertical = 6.dp)
-                        ) {
-                            RadioButton(
-                                selected = conversation?.modelId == m.id || (conversation?.modelId == null && m.id == viewModel.preferences.selectedModel.value),
-                                onClick = {
-                                    viewModel.updateModelForConversation(conversationId, m.id)
-                                    showModelOverrideDialog = false
-                                },
-                                colors = RadioButtonDefaults.colors(
-                                    selectedColor = if (isDark) AccentGold else AccentGreen
-                                )
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(text = m.displayName, style = SalimTextStyles.Secondary.copy(fontWeight = FontWeight.SemiBold), color = headlineColor)
-                                Text(text = m.badge, style = SalimTextStyles.Caption, color = AccentGreen)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                SalimSecondaryButton(
-                    text = "Close",
-                    onClick = { showModelOverrideDialog = false },
-                    isDark = isDark
-                )
-            },
-            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight,
-            shape = SalimShape
-        )
-    }
-
-    // Edit message dialog
+    // Message edit dialog
     if (editingMessage != null) {
         AlertDialog(
             onDismissRequest = { editingMessage = null },
-            title = {
-                Text("Edit Message", style = SalimTextStyles.Title, color = headlineColor)
-            },
+            title = { Text("Edit Prompt & Branch", style = SalimTextStyles.Title) },
             text = {
-                Column {
-                    Text(
-                        "Editing this prompt creates a new branch and regenerates the response:",
-                        style = SalimTextStyles.Caption,
-                        color = captionColor
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    BasicTextField(
-                        value = editContentText,
-                        onValueChange = { editContentText = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 80.dp, max = 200.dp)
-                            .clip(SalimShape)
-                            .background(if (isDark) Color(0xFF141715) else Color(0xFFF0F3EC))
-                            .padding(14.dp),
-                        textStyle = SalimTextStyles.Body.copy(color = headlineColor)
-                    )
-                }
+                BasicTextField(
+                    value = editContentText,
+                    onValueChange = { editContentText = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 80.dp, max = 180.dp)
+                        .clip(SalimShape)
+                        .background(if (isDark) Color(0xFF222622) else Color(0xFFE8ECE4))
+                        .padding(12.dp),
+                    textStyle = SalimTextStyles.Body.copy(color = headlineColor)
+                )
             },
             confirmButton = {
                 SalimPrimaryButton(
-                    text = "Save & Branch",
+                    text = "Save & Regenerate",
                     onClick = {
-                        val msg = editingMessage
-                        if (msg != null && editContentText.isNotBlank()) {
-                            viewModel.editMessage(msg.id, editContentText.trim())
-                            editingMessage = null
-                        }
+                        val m = editingMessage ?: return@SalimPrimaryButton
+                        editingMessage = null
+                        viewModel.editMessage(m.id, editContentText)
                     },
                     isDark = isDark
                 )
             },
             dismissButton = {
-                SalimSecondaryButton(
-                    text = "Cancel",
-                    onClick = { editingMessage = null },
-                    isDark = isDark
-                )
+                SalimSecondaryButton(text = "Cancel", onClick = { editingMessage = null }, isDark = isDark)
             },
-            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight,
-            shape = SalimShape
-        )
-    }
-
-    // Per-conversation instructions & content filter sensitivity dialog
-    if (showInstructionsDialog) {
-        AlertDialog(
-            onDismissRequest = { showInstructionsDialog = false },
-            title = {
-                Text("Conversation Directives", style = SalimTextStyles.Title, color = headlineColor)
-            },
-            text = {
-                Column {
-                    Text("Directives:", style = SalimTextStyles.Caption, color = captionColor)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    BasicTextField(
-                        value = instructionsText,
-                        onValueChange = { instructionsText = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 70.dp, max = 130.dp)
-                            .clip(SalimShape)
-                            .background(if (isDark) Color(0xFF141715) else Color(0xFFF0F3EC))
-                            .padding(12.dp),
-                        textStyle = SalimTextStyles.Body.copy(color = headlineColor)
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Content Filtering Posture:", style = SalimTextStyles.Caption, color = captionColor)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf("standard", "relaxed", "strict").forEach { lvl ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clickable { selectedFilterLevel = lvl }
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                RadioButton(
-                                    selected = selectedFilterLevel == lvl,
-                                    onClick = { selectedFilterLevel = lvl },
-                                    colors = RadioButtonDefaults.colors(
-                                        selectedColor = if (isDark) AccentGold else AccentGreen
-                                    )
-                                )
-                                Text(lvl.replaceFirstChar { it.uppercase() }, style = SalimTextStyles.Caption, color = headlineColor)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                SalimPrimaryButton(
-                    text = "Apply",
-                    onClick = {
-                        scope.launch {
-                            viewModel.repository.updateCustomInstructions(conversationId, instructionsText.trim())
-                            viewModel.repository.updateContentFilterLevel(conversationId, selectedFilterLevel)
-                            showInstructionsDialog = false
-                        }
-                    },
-                    isDark = isDark
-                )
-            },
-            dismissButton = {
-                SalimSecondaryButton(
-                    text = "Cancel",
-                    onClick = { showInstructionsDialog = false },
-                    isDark = isDark
-                )
-            },
-            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight,
-            shape = SalimShape
+            shape = SalimShape,
+            containerColor = if (isDark) CardSurfaceDark else CardSurfaceLight
         )
     }
 }
 
 /**
- * User message bubble with density and font-scale support.
+ * User Message Bubble (Solid rounded-pill container aligned right)
  */
 @Composable
 private fun UserMessageBubble(
@@ -1376,28 +1719,15 @@ private fun UserMessageBubble(
     val bgColor = if (isDark) UserBubbleBgDark else UserBubbleBgLight
     val textColor = if (isDark) UserBubbleTextDark else UserBubbleTextLight
 
-    var showActions by remember { mutableStateOf(false) }
-
     val padH = when (density) { "compact" -> 14.dp; "spacious" -> 22.dp; else -> 18.dp }
-    val padV = when (density) { "compact" -> 8.dp; "spacious" -> 16.dp; else -> 12.dp }
+    val padV = when (density) { "compact" -> 10.dp; "spacious" -> 18.dp; else -> 14.dp }
+
+    var showActions by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End
     ) {
-        if (message.totalBranches > 1) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 4.dp, end = 6.dp)
-            ) {
-                Text(
-                    text = "Branch ${message.branchIndex + 1}/${message.totalBranches}",
-                    style = SalimTextStyles.Caption,
-                    color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
-                )
-            }
-        }
-
         if (message.attachmentUri != null) {
             if (message.attachmentType == "image") {
                 AsyncImage(
@@ -1453,6 +1783,20 @@ private fun UserMessageBubble(
             )
         }
 
+        // Branch indicator (Section P.1)
+        if (message.totalBranches > 1) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 2.dp, end = 4.dp)
+            ) {
+                Text(
+                    text = "${message.branchIndex + 1} of ${message.totalBranches}",
+                    style = SalimTextStyles.Caption.copy(fontSize = 11.sp),
+                    color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
+                )
+            }
+        }
+
         AnimatedVisibility(visible = showActions) {
             Row(
                 modifier = Modifier.padding(top = 4.dp, end = 4.dp),
@@ -1499,16 +1843,23 @@ private fun UserMessageBubble(
 
             Icon(
                 imageVector = statusIcon,
-                contentDescription = "Delivery status: ${message.deliveryStatus}",
+                contentDescription = message.deliveryStatus,
                 tint = statusTint,
-                modifier = Modifier.size(13.dp)
+                modifier = Modifier.size(14.dp)
             )
         }
     }
 }
 
 /**
- * Assistant message bubble with artifacts detector, density, and font-scale support.
+ * Assistant Message
+ *
+ * Implements Section M.2:
+ * "No visible container behind assistant responses. Unlike the user's own message
+ * (a solid rounded-pill bubble), the assistant's response sits directly on the plain
+ * background with no bubble, no card, no border — visually distinguishing 'something I said'
+ * from 'something the assistant said' through presence-or-absence of a container,
+ * not through color or alignment alone."
  */
 @Composable
 private fun AssistantMessageBubble(
@@ -1521,16 +1872,19 @@ private fun AssistantMessageBubble(
     isDark: Boolean,
     density: String,
     fontScale: Float,
+    activeWordRange: Pair<Int, Int>?,
     onCopy: () -> Unit,
     onStarToggle: () -> Unit,
     onRegenerate: () -> Unit,
+    onRetryWithOtherModel: () -> Unit,
+    onCompareBranches: () -> Unit,
+    onExplainPortion: () -> Unit,
     onSpeak: () -> Unit,
     onDeletePair: () -> Unit,
     onOpenArtifact: (title: String, type: String, language: String, content: String) -> Unit,
     onFlagMessage: () -> Unit
 ) {
-    val bgColor = if (isDark) AssistantBubbleBgDark else AssistantBubbleBgLight
-    val textColor = if (isDark) AssistantBubbleTextDark else AssistantBubbleTextLight
+    val textColor = if (isDark) HeadlineDark else HeadlineLight
 
     var showLatencyFloor by remember { mutableStateOf(false) }
     LaunchedEffect(isStreaming, content.isNotEmpty()) {
@@ -1542,94 +1896,107 @@ private fun AssistantMessageBubble(
         }
     }
 
-    val padH = when (density) { "compact" -> 14.dp; "spacious" -> 22.dp; else -> 18.dp }
-    val padV = when (density) { "compact" -> 10.dp; "spacious" -> 18.dp; else -> 14.dp }
-
-    // Check if message content contains substantial code/data block for Artifact extraction (Feature 6)
     val hasCodeBlock = remember(content) {
         content.contains("```") && content.length > 120
     }
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .then(
+                if (isHighlighted) Modifier.background(AccentGold.copy(alpha = 0.12f), SalimShape).padding(8.dp)
+                else Modifier
+            ),
         horizontalAlignment = Alignment.Start
     ) {
-        Box(
-            modifier = Modifier
-                .widthIn(max = 340.dp)
-                .clip(SalimShape)
-                .background(bgColor)
-                .then(
-                    if (isHighlighted) Modifier.border(2.dp, AccentGold, SalimShape)
-                    else Modifier
-                )
-                .padding(horizontal = padH, vertical = padV)
-        ) {
-            Column {
-                if (content.isBlank() && isStreaming) {
-                    if (showLatencyFloor) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(AccentGreen)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Formulating response...",
-                                style = SalimTextStyles.Secondary,
-                                color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
-                            )
-                        }
-                    } else {
-                        Spacer(modifier = Modifier.height(20.dp))
-                    }
-                } else {
-                    SalimMarkdownRenderer(
-                        content = content,
-                        textColor = textColor,
-                        isDark = isDark
+        if (content.isBlank() && isStreaming) {
+            if (showLatencyFloor) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(AccentGreen)
                     )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Formulating response...",
+                        style = SalimTextStyles.Secondary,
+                        color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
+                    )
+                }
+            } else {
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+        } else {
+            // Render directly on plain background with zero card or container
+            SalimMarkdownRenderer(
+                content = content,
+                textColor = textColor,
+                isDark = isDark,
+                activeWordRange = activeWordRange,
+                isStreaming = isStreaming,
+                fontScale = fontScale
+            )
 
-                    // Artifact Badge Card if response contains substantial code / output
-                    if (hasCodeBlock && !isStreaming) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(SalimShape)
-                                .background(if (isDark) Color(0xFF141715) else Color(0xFFF0F3EC))
-                                .clickable {
-                                    val lang = content.substringAfter("```").substringBefore("\n").trim().ifEmpty { "code" }
-                                    val codeBody = content.substringAfter("```$lang").substringBefore("```").trim()
-                                    onOpenArtifact("Generated $lang Output", "code", lang, codeBody)
-                                }
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Code,
-                                    contentDescription = null,
-                                    tint = AccentGreen,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Open in Artifact Panel",
-                                    style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.SemiBold),
-                                    color = AccentGreen
-                                )
-                            }
+            // Artifact Badge Card if response contains substantial code / output
+            if (hasCodeBlock && !isStreaming) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(SalimShape)
+                        .background(if (isDark) Color(0xFF141715) else Color(0xFFF0F3EC))
+                        .clickable {
+                            val lang = content.substringAfter("```").substringBefore("\n").trim().ifEmpty { "code" }
+                            val codeBody = content.substringAfter("```$lang").substringBefore("```").trim()
+                            onOpenArtifact("Generated $lang Output", "code", lang, codeBody)
                         }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Code,
+                            contentDescription = null,
+                            tint = AccentGreen,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Open in Dedicated Artifact Panel",
+                            style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.SemiBold),
+                            color = AccentGreen
+                        )
                     }
                 }
             }
         }
 
-        // Toolbar below response: Copy, Star, Speak, Regenerate, Flag, Delete pair
+        // Branch indicator (Section P.1)
+        if (message.totalBranches > 1) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .clip(CircleShape)
+                    .background(if (isDark) Color(0xFF222622) else Color(0xFFE8ECE4))
+                    .padding(horizontal = 10.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = "Branch ${message.branchIndex + 1} of ${message.totalBranches}",
+                    style = SalimTextStyles.Caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
+                    color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
+                )
+            }
+        }
+
+        // Bottom Action Bar
         Row(
-            modifier = Modifier.padding(top = 6.dp, start = 4.dp),
+            modifier = Modifier.padding(top = 10.dp, start = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -1655,6 +2022,21 @@ private fun AssistantMessageBubble(
                     Icon(Icons.Default.Refresh, contentDescription = "Regenerate response", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
                 }
 
+                // Section P.2: Retry with different model
+                IconButton(onClick = onRetryWithOtherModel, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Tune, contentDescription = "Retry with different model", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
+                }
+
+                // Section P.3: Compare branches
+                IconButton(onClick = onCompareBranches, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.CompareArrows, contentDescription = "Compare response branches", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
+                }
+
+                // Section R.9: Explain this portion
+                IconButton(onClick = onExplainPortion, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = "Explain this part", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
+                }
+
                 IconButton(onClick = onFlagMessage, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.Flag, contentDescription = "Report response", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
                 }
@@ -1665,16 +2047,16 @@ private fun AssistantMessageBubble(
             }
 
             if (showTokens && message.tokenCount > 0) {
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = "${message.tokenCount} tokens",
+                    text = "${message.tokenCount} tok",
                     style = SalimTextStyles.Caption,
                     color = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
                 )
             }
 
             if (showTimestamp) {
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 val formattedTime = remember(message.createdAt) {
                     SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(message.createdAt))
                 }

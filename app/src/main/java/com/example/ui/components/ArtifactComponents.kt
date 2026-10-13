@@ -92,8 +92,6 @@ fun ArtifactPanelSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
     var editableContent by remember(artifact) { mutableStateOf(artifact.content) }
-    var selectedTab by remember { mutableIntStateOf(if (artifact.language.equals("html", true)) 0 else 1) }
-
     val headlineColor = if (isDark) HeadlineDark else HeadlineLight
     val captionColor = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
     val sheetBg = if (isDark) CardSurfaceDark else CardSurfaceLight
@@ -102,6 +100,19 @@ fun ArtifactPanelSheet(
             artifact.language.equals("svg", true) ||
             artifact.language.equals("markdown", true) ||
             artifact.language.equals("md", true)
+
+    val availableTabs = remember(isPreviewable) {
+        if (isPreviewable) {
+            listOf("Safe Preview", "Live Editor")
+        } else {
+            listOf("Live Editor")
+        }
+    }
+    var selectedTabIndex by remember(artifact.id) {
+        mutableIntStateOf(0)
+    }
+    val safeTabIndex = selectedTabIndex.coerceIn(0, availableTabs.lastIndex.coerceAtLeast(0))
+    val currentTab = availableTabs.getOrElse(safeTabIndex) { "Live Editor" }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -176,28 +187,25 @@ fun ArtifactPanelSheet(
 
             // Tab bar: Live Editor vs Sandbox Preview
             TabRow(
-                selectedTabIndex = selectedTab,
+                selectedTabIndex = safeTabIndex,
                 containerColor = Color.Transparent,
                 contentColor = headlineColor,
                 indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                        color = if (isDark) AccentGold else AccentGreen
-                    )
+                    if (safeTabIndex in tabPositions.indices) {
+                        TabRowDefaults.SecondaryIndicator(
+                            Modifier.tabIndicatorOffset(tabPositions[safeTabIndex]),
+                            color = if (isDark) AccentGold else AccentGreen
+                        )
+                    }
                 }
             ) {
-                if (isPreviewable) {
+                availableTabs.forEachIndexed { index, title ->
                     Tab(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        text = { Text("Safe Preview", style = SalimTextStyles.Secondary) }
+                        selected = safeTabIndex == index,
+                        onClick = { selectedTabIndex = index },
+                        text = { Text(title, style = SalimTextStyles.Secondary) }
                     )
                 }
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Live Editor", style = SalimTextStyles.Secondary) }
-                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -208,7 +216,7 @@ fun ArtifactPanelSheet(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                if (selectedTab == 0 && isPreviewable) {
+                if (currentTab == "Safe Preview" && isPreviewable) {
                     // Safe Sandboxed WebView preview
                     Box(
                         modifier = Modifier
