@@ -640,13 +640,24 @@ private fun ConversationCardRow(
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            // Timestamp and options menu
+            // Timestamp, unread badge, and options menu
             Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = formattedDate,
-                    style = SalimTextStyles.Caption,
-                    color = captionColor
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (conversation.hasUnreadResponse) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(AccentGreen)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = formattedDate,
+                        style = SalimTextStyles.Caption,
+                        color = if (conversation.hasUnreadResponse) AccentGreen else captionColor
+                    )
+                }
 
                 Box {
                     IconButton(

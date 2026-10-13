@@ -20,7 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -202,7 +202,7 @@ fun StarredMessagesScreen(
                                         isDark = isDark,
                                         leadingIcon = {
                                             Icon(
-                                                imageVector = Icons.Default.Chat,
+                                                imageVector = Icons.AutoMirrored.Filled.Chat,
                                                 contentDescription = null,
                                                 modifier = Modifier.size(16.dp)
                                             )

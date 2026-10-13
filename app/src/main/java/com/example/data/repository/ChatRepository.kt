@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import com.example.data.db.ConversationDao
 import com.example.data.db.ConversationEntity
+import com.example.data.db.FlaggedReportDao
+import com.example.data.db.FlaggedReportEntity
 import com.example.data.db.FolderDao
 import com.example.data.db.FolderEntity
 import com.example.data.db.MessageDao
@@ -13,7 +15,9 @@ import com.example.data.db.TemplateDao
 import com.example.data.network.ChatMessagePayload
 import com.example.data.network.GroqStreamingClient
 import com.example.data.network.StreamEvent
+import com.example.data.preferences.AvailableModels
 import com.example.data.preferences.UserPreferences
+import com.example.ui.components.NotificationHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +27,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
@@ -35,11 +41,16 @@ class ChatRepository(
     private val messageDao: MessageDao,
     private val folderDao: FolderDao,
     private val templateDao: TemplateDao,
+    private val flaggedReportDao: FlaggedReportDao,
     val userPreferences: UserPreferences,
     private val context: Context
 ) {
     private val streamingClient = GroqStreamingClient()
     private val repoScope = CoroutineScope(Dispatchers.IO)
+    private val notificationHelper = NotificationHelper(context, userPreferences)
+
+    // Tracks currently open/viewed conversation in UI
+    var activeViewingConversationId: String? = null
 
     init {
         streamingClient.prewarmConnection()
@@ -50,6 +61,7 @@ class ChatRepository(
     val allFolders: Flow<List<FolderEntity>> = folderDao.getAllFolders()
     val allTemplates: Flow<List<PromptTemplateEntity>> = templateDao.getAllTemplates()
     val starredMessages: Flow<List<MessageEntity>> = messageDao.getAllStarredMessages()
+    val flaggedReports: Flow<List<FlaggedReportEntity>> = flaggedReportDao.getAllReports()
 
     // Streaming state for active generation
     private val _isGenerating = MutableStateFlow(false)
@@ -90,6 +102,10 @@ class ChatRepository(
         id
     }
 
+    suspend fun markConversationAsRead(id: String) = withContext(Dispatchers.IO) {
+        conversationDao.updateUnreadStatus(id, false)
+    }
+
     suspend fun updateConversationTitle(id: String, title: String) = withContext(Dispatchers.IO) {
         conversationDao.updateTitle(id, title)
     }
@@ -110,6 +126,14 @@ class ChatRepository(
         conversationDao.updateCustomInstructions(id, instructions)
     }
 
+    suspend fun updateModelOverride(id: String, modelId: String?) = withContext(Dispatchers.IO) {
+        conversationDao.updateModelId(id, modelId)
+    }
+
+    suspend fun updateContentFilterLevel(id: String, level: String) = withContext(Dispatchers.IO) {
+        conversationDao.updateContentFilterLevel(id, level)
+    }
+
     suspend fun updateDraft(id: String, draft: String) = withContext(Dispatchers.IO) {
         conversationDao.updateDraft(id, draft)
     }
@@ -127,7 +151,8 @@ class ChatRepository(
             title = "${orig.title} (Copy)",
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis(),
-            isPinned = false
+            isPinned = false,
+            hasUnreadResponse = false
         )
         conversationDao.insert(newConv)
 
@@ -150,7 +175,8 @@ class ChatRepository(
             title = "${orig.title} (Branch)",
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis(),
-            isPinned = false
+            isPinned = false,
+            hasUnreadResponse = false
         )
         conversationDao.insert(newConv)
 
@@ -182,6 +208,18 @@ class ChatRepository(
         messageDao.deleteById(assistantMsgId)
     }
 
+    suspend fun flagMessageReport(messageId: String, conversationId: String, reason: String) = withContext(Dispatchers.IO) {
+        flaggedReportDao.insert(
+            FlaggedReportEntity(
+                id = UUID.randomUUID().toString(),
+                messageId = messageId,
+                conversationId = conversationId,
+                reason = reason,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+    }
+
     fun stopGeneration() {
         activeStreamJob?.cancel()
         _isGenerating.value = false
@@ -190,7 +228,7 @@ class ChatRepository(
     }
 
     /**
-     * Sends a user message and streams assistant response token by token.
+     * Sends a user message and streams assistant response token by token with background survivability.
      */
     fun sendMessage(
         conversationId: String,
@@ -235,19 +273,17 @@ class ChatRepository(
             deliveryStatus = "sending"
         )
 
+        // Survived in repository application CoroutineScope (never aborted by activity pauses)
         activeStreamJob = repoScope.launch {
-            // Speculative local echo: insert immediately into database
             messageDao.insert(userMessage)
             messageDao.insert(assistantPlaceholder)
 
             conversationDao.updateDraft(conversationId, "")
             val conversation = conversationDao.getConversationById(conversationId)
 
-            // Build system prompt based on style + custom instructions
-            val systemPrompt = buildSystemPrompt(conversation?.customInstructions)
+            val systemPrompt = buildSystemPrompt(conversation?.customInstructions, conversation?.contentFilterLevel)
             val modelId = conversation?.modelId ?: userPreferences.selectedModel.value
 
-            // Prepare context history (stable prefix to maximize Groq prompt caching)
             val history = messageDao.getMessagesList(conversationId)
             val payloadList = mutableListOf<ChatMessagePayload>()
             payloadList.add(ChatMessagePayload("system", systemPrompt))
@@ -258,16 +294,21 @@ class ChatRepository(
                 }
             }
 
-            val style = userPreferences.responseStyle.value
-            val temp = when (style) {
+            // Length limits based on responseLength preference
+            val maxTokens = when (userPreferences.responseLength.value) {
+                "short" -> 800
+                "long" -> 8192
+                else -> when (userPreferences.responseStyle.value) {
+                    "concise" -> 1500
+                    "detailed" -> 8192
+                    else -> userPreferences.maxTokens.value
+                }
+            }
+
+            val temp = when (userPreferences.responseStyle.value) {
                 "concise" -> 0.4f
                 "detailed" -> 0.85f
                 else -> userPreferences.temperature.value
-            }
-            val maxTokens = when (style) {
-                "concise" -> 1500
-                "detailed" -> 8192
-                else -> userPreferences.maxTokens.value
             }
 
             _isGenerating.value = true
@@ -287,7 +328,6 @@ class ChatRepository(
             ).collect { event ->
                 when (event) {
                     is StreamEvent.Connected -> {
-                        // Request is confirmed sent to inference backend
                         messageDao.updateDeliveryStatus(userMessageId, "sent")
                         messageDao.updateDeliveryStatus(assistantMessageId, "sent")
                     }
@@ -309,19 +349,24 @@ class ChatRepository(
                         messageDao.update(updatedAssistant)
                         messageDao.updateDeliveryStatus(userMessageId, "sent")
 
-                        // Update conversation snippet and updatedAt immediately
                         val snippet = finalContent.take(120).replace("\n", " ")
                         val conv = conversationDao.getConversationById(conversationId)
                         if (conv != null) {
+                            val isUserAway = activeViewingConversationId != conversationId
                             conversationDao.update(
                                 conv.copy(
                                     lastMessageSnippet = snippet,
-                                    updatedAt = System.currentTimeMillis()
+                                    updatedAt = System.currentTimeMillis(),
+                                    hasUnreadResponse = isUserAway
                                 )
                             )
 
-                            // Title generation runs fully asynchronously in background:
-                            // NEVER blocks or delays the user from seeing their answer!
+                            // Unread push notification if user navigated away
+                            if (isUserAway) {
+                                notificationHelper.showResponseCompleted(conversationId, conv.title, snippet)
+                            }
+
+                            // Fully asynchronous non-blocking title generation
                             if (conv.title == "New conversation" || conv.title.isBlank()) {
                                 repoScope.launch(Dispatchers.IO) {
                                     val generatedTitle = streamingClient.generateTitle(apiKey, prompt, finalContent)
@@ -354,8 +399,34 @@ class ChatRepository(
     }
 
     /**
-     * Regenerates the last assistant response.
+     * User-triggered action to summarize the conversation so far on demand.
      */
+    fun summarizeConversation(conversationId: String) {
+        repoScope.launch {
+            val history = messageDao.getMessagesList(conversationId)
+            if (history.isEmpty()) return@launch
+
+            val prompt = "Please generate a clear, structured summary of our discussion so far. " +
+                    "Include key topics explored, conclusions reached, and open questions or next steps."
+
+            sendMessage(conversationId, prompt)
+        }
+    }
+
+    /**
+     * Calculates tokens used and percentage of model context window.
+     */
+    suspend fun getContextUsage(conversationId: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val conv = conversationDao.getConversationById(conversationId)
+        val messages = messageDao.getMessagesList(conversationId)
+        val totalChars = messages.sumOf { it.content.length }
+        val estimatedTokens = (totalChars / 4).coerceAtLeast(1)
+
+        val modelId = conv?.modelId ?: userPreferences.selectedModel.value
+        val modelInfo = AvailableModels.find { it.id == modelId } ?: AvailableModels.first()
+        Pair(estimatedTokens, modelInfo.contextWindowTokens)
+    }
+
     fun regenerateResponse(conversationId: String, assistantMessageId: String) {
         repoScope.launch {
             val messages = messageDao.getMessagesList(conversationId)
@@ -363,7 +434,6 @@ class ChatRepository(
             if (assistantIdx > 0) {
                 val userMsg = messages[assistantIdx - 1]
                 if (userMsg.sender == "user") {
-                    // Remove current assistant message and trigger re-send
                     messageDao.deleteById(assistantMessageId)
                     sendMessage(conversationId, userMsg.content)
                 }
@@ -371,9 +441,6 @@ class ChatRepository(
         }
     }
 
-    /**
-     * Edits a previously sent user message, creating a branch group.
-     */
     fun editMessageAndBranch(
         conversationId: String,
         userMessageId: String,
@@ -383,7 +450,6 @@ class ChatRepository(
             val userMsg = messageDao.getMessageById(userMessageId) ?: return@launch
             val branchGroupId = userMsg.branchGroupId ?: UUID.randomUUID().toString()
 
-            // Update original with branch group
             messageDao.update(
                 userMsg.copy(
                     branchGroupId = branchGroupId,
@@ -391,7 +457,6 @@ class ChatRepository(
                 )
             )
 
-            // Create branched new user message
             val newMsgId = UUID.randomUUID().toString()
             val newMsg = userMsg.copy(
                 id = newMsgId,
@@ -399,16 +464,16 @@ class ChatRepository(
                 branchGroupId = branchGroupId,
                 branchIndex = userMsg.branchIndex + 1,
                 totalBranches = userMsg.totalBranches + 1,
-                createdAt = System.currentTimeMillis()
+                createdAt = System.currentTimeMillis(),
+                deliveryStatus = "sending"
             )
             messageDao.insert(newMsg)
 
-            // Send from here
             sendMessage(conversationId, newContent)
         }
     }
 
-    private fun buildSystemPrompt(conversationOverride: String?): String {
+    private fun buildSystemPrompt(conversationOverride: String?, filterLevel: String? = "standard"): String {
         val basePrompt = "You are Salim, a mature, highly capable, and refined conversational assistant. " +
                 "You provide thoughtful, accurate, and direct responses with clarity and intellectual depth. " +
                 "Format responses cleanly with markdown where appropriate."
@@ -419,11 +484,27 @@ class ChatRepository(
             else -> "Provide balanced, well-structured, and naturally paced responses."
         }
 
+        val lengthInstructions = when (userPreferences.responseLength.value) {
+            "short" -> "Keep your answer brief, concise, and contained within 1-2 focused paragraphs."
+            "long" -> "Provide a thorough, comprehensive, and exhaustive deep-dive."
+            else -> ""
+        }
+
+        val safetyInstructions = when (filterLevel) {
+            "relaxed" -> "Filter sensitivity is relaxed: prioritize open technical candor."
+            "strict" -> "Filter sensitivity is strict: ensure utmost formal decorum."
+            else -> "Filter sensitivity is standard: maintain balanced, polite engagement."
+        }
+
         val globalInstructions = userPreferences.globalInstructions.value
         val perConvInstructions = conversationOverride ?: ""
 
         val builder = StringBuilder(basePrompt)
         builder.append("\n\nStyle: ").append(styleInstructions)
+        if (lengthInstructions.isNotEmpty()) {
+            builder.append("\nLength target: ").append(lengthInstructions)
+        }
+        builder.append("\nContent posture: ").append(safetyInstructions)
 
         if (globalInstructions.isNotBlank()) {
             builder.append("\n\nUser's Global Preferences:\n").append(globalInstructions)
@@ -435,9 +516,6 @@ class ChatRepository(
         return builder.toString()
     }
 
-    /**
-     * Extracts text content from a chosen URI (TXT, MD, CSV, etc.)
-     */
     suspend fun extractTextFromUri(uri: Uri): String = withContext(Dispatchers.IO) {
         try {
             val inputStream = context.contentResolver.openInputStream(uri) ?: return@withContext ""
@@ -445,7 +523,7 @@ class ChatRepository(
             val sb = StringBuilder()
             var line: String? = reader.readLine()
             var count = 0
-            while (line != null && count < 2000) { // Limit to 2000 lines
+            while (line != null && count < 2000) {
                 sb.append(line).append("\n")
                 line = reader.readLine()
                 count++
@@ -457,9 +535,6 @@ class ChatRepository(
         }
     }
 
-    /**
-     * Exports a conversation as Markdown or Plain text.
-     */
     suspend fun exportConversation(conversationId: String, asMarkdown: Boolean): String = withContext(Dispatchers.IO) {
         val conv = conversationDao.getConversationById(conversationId) ?: return@withContext ""
         val messages = messageDao.getMessagesList(conversationId)
@@ -486,7 +561,167 @@ class ChatRepository(
         sb.toString()
     }
 
-    // Folders management
+    /**
+     * Full archive JSON export (Feature 26).
+     */
+    suspend fun exportFullArchiveJson(): String = withContext(Dispatchers.IO) {
+        val conversations = conversationDao.getAllConversationsList()
+        val messages = messageDao.getAllMessagesList()
+        val folders = folderDao.getAllFoldersList()
+        val templates = templateDao.getAllTemplatesList()
+
+        val root = JSONObject().apply {
+            put("app", "Salim")
+            put("version", 2)
+            put("exportedAt", System.currentTimeMillis())
+
+            val convsArr = JSONArray()
+            for (c in conversations) {
+                convsArr.put(JSONObject().apply {
+                    put("id", c.id)
+                    put("title", c.title)
+                    put("createdAt", c.createdAt)
+                    put("updatedAt", c.updatedAt)
+                    put("isPinned", c.isPinned)
+                    put("isArchived", c.isArchived)
+                    put("folderId", c.folderId ?: "")
+                    put("tag", c.tag)
+                    put("customInstructions", c.customInstructions ?: "")
+                    put("modelId", c.modelId ?: "")
+                    put("contentFilterLevel", c.contentFilterLevel)
+                })
+            }
+            put("conversations", convsArr)
+
+            val msgsArr = JSONArray()
+            for (m in messages) {
+                msgsArr.put(JSONObject().apply {
+                    put("id", m.id)
+                    put("conversationId", m.conversationId)
+                    put("sender", m.sender)
+                    put("content", m.content)
+                    put("createdAt", m.createdAt)
+                    put("isStarred", m.isStarred)
+                    put("branchGroupId", m.branchGroupId ?: "")
+                    put("branchIndex", m.branchIndex)
+                    put("totalBranches", m.totalBranches)
+                    put("tokenCount", m.tokenCount)
+                    put("deliveryStatus", m.deliveryStatus)
+                })
+            }
+            put("messages", msgsArr)
+
+            val fldrsArr = JSONArray()
+            for (f in folders) {
+                fldrsArr.put(JSONObject().apply {
+                    put("id", f.id)
+                    put("name", f.name)
+                    put("colorHex", f.colorHex)
+                })
+            }
+            put("folders", fldrsArr)
+
+            val tmplsArr = JSONArray()
+            for (t in templates) {
+                tmplsArr.put(JSONObject().apply {
+                    put("id", t.id)
+                    put("title", t.title)
+                    put("shortcut", t.shortcut)
+                    put("content", t.content)
+                })
+            }
+            put("templates", tmplsArr)
+        }
+
+        root.toString(2)
+    }
+
+    /**
+     * Selective / Full archive import (Feature 27).
+     */
+    suspend fun importArchiveJson(jsonString: String): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val root = JSONObject(jsonString)
+            val convsArr = root.optJSONArray("conversations") ?: JSONArray()
+            val msgsArr = root.optJSONArray("messages") ?: JSONArray()
+            val fldrsArr = root.optJSONArray("folders") ?: JSONArray()
+            val tmplsArr = root.optJSONArray("templates") ?: JSONArray()
+
+            val convList = mutableListOf<ConversationEntity>()
+            for (i in 0 until convsArr.length()) {
+                val o = convsArr.getJSONObject(i)
+                convList.add(
+                    ConversationEntity(
+                        id = o.optString("id", UUID.randomUUID().toString()),
+                        title = o.optString("title", "Imported Dialogue"),
+                        createdAt = o.optLong("createdAt", System.currentTimeMillis()),
+                        updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
+                        isPinned = o.optBoolean("isPinned", false),
+                        isArchived = o.optBoolean("isArchived", false),
+                        folderId = o.optString("folderId").ifEmpty { null },
+                        tag = o.optString("tag", "General"),
+                        customInstructions = o.optString("customInstructions").ifEmpty { null },
+                        modelId = o.optString("modelId").ifEmpty { null },
+                        contentFilterLevel = o.optString("contentFilterLevel", "standard")
+                    )
+                )
+            }
+            conversationDao.insertAll(convList)
+
+            val msgList = mutableListOf<MessageEntity>()
+            for (i in 0 until msgsArr.length()) {
+                val o = msgsArr.getJSONObject(i)
+                msgList.add(
+                    MessageEntity(
+                        id = o.optString("id", UUID.randomUUID().toString()),
+                        conversationId = o.optString("conversationId"),
+                        sender = o.optString("sender", "user"),
+                        content = o.optString("content", ""),
+                        createdAt = o.optLong("createdAt", System.currentTimeMillis()),
+                        isStarred = o.optBoolean("isStarred", false),
+                        branchGroupId = o.optString("branchGroupId").ifEmpty { null },
+                        branchIndex = o.optInt("branchIndex", 0),
+                        totalBranches = o.optInt("totalBranches", 1),
+                        tokenCount = o.optInt("tokenCount", 0),
+                        deliveryStatus = o.optString("deliveryStatus", "sent")
+                    )
+                )
+            }
+            messageDao.insertAll(msgList)
+
+            val fldrList = mutableListOf<FolderEntity>()
+            for (i in 0 until fldrsArr.length()) {
+                val o = fldrsArr.getJSONObject(i)
+                fldrList.add(
+                    FolderEntity(
+                        id = o.optString("id", UUID.randomUUID().toString()),
+                        name = o.optString("name", "Imported Folder"),
+                        colorHex = o.optString("colorHex", "#537357")
+                    )
+                )
+            }
+            folderDao.insertAll(fldrList)
+
+            val tmplList = mutableListOf<PromptTemplateEntity>()
+            for (i in 0 until tmplsArr.length()) {
+                val o = tmplsArr.getJSONObject(i)
+                tmplList.add(
+                    PromptTemplateEntity(
+                        id = o.optString("id", UUID.randomUUID().toString()),
+                        title = o.optString("title", "Imported Template"),
+                        shortcut = o.optString("shortcut", "/shortcut"),
+                        content = o.optString("content", "")
+                    )
+                )
+            }
+            templateDao.insertAll(tmplList)
+
+            Result.success(convList.size)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun createFolder(name: String, colorHex: String = "#537357") = withContext(Dispatchers.IO) {
         folderDao.insert(FolderEntity(id = UUID.randomUUID().toString(), name = name, colorHex = colorHex))
     }
@@ -495,7 +730,6 @@ class ChatRepository(
         folderDao.deleteById(id)
     }
 
-    // Templates management
     suspend fun createTemplate(title: String, shortcut: String, content: String) = withContext(Dispatchers.IO) {
         templateDao.insert(
             PromptTemplateEntity(
@@ -511,15 +745,13 @@ class ChatRepository(
         templateDao.deleteById(id)
     }
 
-    /**
-     * Deletes ALL local data (conversations, messages, folders, templates, settings).
-     */
     suspend fun deleteAllData() = withContext(Dispatchers.IO) {
         stopGeneration()
         messageDao.deleteAll()
         conversationDao.deleteAll()
         folderDao.deleteAll()
         templateDao.deleteAll()
+        flaggedReportDao.deleteAll()
         userPreferences.clearAllPreferences()
     }
 }

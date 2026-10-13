@@ -15,9 +15,10 @@ import java.util.UUID
         ConversationEntity::class,
         MessageEntity::class,
         FolderEntity::class,
-        PromptTemplateEntity::class
+        PromptTemplateEntity::class,
+        FlaggedReportEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -25,6 +26,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun folderDao(): FolderDao
     abstract fun templateDao(): TemplateDao
+    abstract fun flaggedReportDao(): FlaggedReportDao
 
     companion object {
         @Volatile

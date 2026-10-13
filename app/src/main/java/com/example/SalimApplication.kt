@@ -23,6 +23,7 @@ class SalimApplication : Application() {
             messageDao = database.messageDao(),
             folderDao = database.folderDao(),
             templateDao = database.templateDao(),
+            flaggedReportDao = database.flaggedReportDao(),
             userPreferences = userPreferences,
             context = this
         )

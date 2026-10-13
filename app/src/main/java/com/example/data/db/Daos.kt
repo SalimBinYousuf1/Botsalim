@@ -15,6 +15,9 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE isArchived = 1 ORDER BY updatedAt DESC")
     fun getArchivedConversations(): Flow<List<ConversationEntity>>
 
+    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    suspend fun getAllConversationsList(): List<ConversationEntity>
+
     @Query("SELECT * FROM conversations WHERE id = :id")
     fun getConversationFlow(id: String): Flow<ConversationEntity?>
 
@@ -35,6 +38,9 @@ interface ConversationDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(conversation: ConversationEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(conversations: List<ConversationEntity>)
+
     @Update
     suspend fun update(conversation: ConversationEntity)
 
@@ -43,6 +49,15 @@ interface ConversationDao {
 
     @Query("UPDATE conversations SET isArchived = :isArchived WHERE id = :id")
     suspend fun setArchived(id: String, isArchived: Boolean)
+
+    @Query("UPDATE conversations SET hasUnreadResponse = :hasUnread WHERE id = :id")
+    suspend fun updateUnreadStatus(id: String, hasUnread: Boolean)
+
+    @Query("UPDATE conversations SET modelId = :modelId WHERE id = :id")
+    suspend fun updateModelId(id: String, modelId: String?)
+
+    @Query("UPDATE conversations SET contentFilterLevel = :level WHERE id = :id")
+    suspend fun updateContentFilterLevel(id: String, level: String)
 
     @Query("UPDATE conversations SET title = :title, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateTitle(id: String, title: String, updatedAt: Long = System.currentTimeMillis())
@@ -70,6 +85,9 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
     suspend fun getMessagesList(conversationId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages ORDER BY createdAt ASC")
+    suspend fun getAllMessagesList(): List<MessageEntity>
 
     @Query("SELECT * FROM messages WHERE isStarred = 1 ORDER BY createdAt DESC")
     fun getAllStarredMessages(): Flow<List<MessageEntity>>
@@ -110,8 +128,14 @@ interface FolderDao {
     @Query("SELECT * FROM folders ORDER BY name ASC")
     fun getAllFolders(): Flow<List<FolderEntity>>
 
+    @Query("SELECT * FROM folders ORDER BY name ASC")
+    suspend fun getAllFoldersList(): List<FolderEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(folder: FolderEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(folders: List<FolderEntity>)
 
     @Query("DELETE FROM folders WHERE id = :id")
     suspend fun deleteById(id: String)
@@ -125,12 +149,30 @@ interface TemplateDao {
     @Query("SELECT * FROM prompt_templates ORDER BY title ASC")
     fun getAllTemplates(): Flow<List<PromptTemplateEntity>>
 
+    @Query("SELECT * FROM prompt_templates ORDER BY title ASC")
+    suspend fun getAllTemplatesList(): List<PromptTemplateEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(template: PromptTemplateEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(templates: List<PromptTemplateEntity>)
 
     @Query("DELETE FROM prompt_templates WHERE id = :id")
     suspend fun deleteById(id: String)
 
     @Query("DELETE FROM prompt_templates")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface FlaggedReportDao {
+    @Query("SELECT * FROM flagged_reports ORDER BY createdAt DESC")
+    fun getAllReports(): Flow<List<FlaggedReportEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(report: FlaggedReportEntity)
+
+    @Query("DELETE FROM flagged_reports")
     suspend fun deleteAll()
 }

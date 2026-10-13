@@ -10,6 +10,7 @@ import com.example.data.db.FolderEntity
 import com.example.data.db.MessageEntity
 import com.example.data.db.PromptTemplateEntity
 import com.example.data.repository.ChatRepository
+import com.example.ui.components.ArtifactItem
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,6 +33,12 @@ data class AttachmentDraft(
     val type: String = "text", // "image", "document", "text"
     val name: String = "",
     val extractedText: String? = null
+)
+
+data class TableOfContentsItem(
+    val messageIndex: Int,
+    val messageId: String,
+    val label: String
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -70,7 +77,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val inputText = MutableStateFlow("")
     val activeAttachment = MutableStateFlow<AttachmentDraft?>(null)
 
-    // Timestamps toggle in chat (Feature 17: on-demand)
+    // In-chat Jump-To-Message Search (Feature 1)
+    val isInChatSearching = MutableStateFlow(false)
+    val inChatSearchQuery = MutableStateFlow("")
+    val highlightedMessageId = MutableStateFlow<String?>(null)
+
+    // Table of contents sheet (Feature 2)
+    val isTableOfContentsOpen = MutableStateFlow(false)
+
+    // Artifact panel (Features 6, 7, 8, 9)
+    val activeArtifact = MutableStateFlow<ArtifactItem?>(null)
+
+    // Flagged Report Dialog (Feature 31)
+    val messageToFlag = MutableStateFlow<MessageEntity?>(null)
+
+    // Timestamps toggle in chat
     val showTimestamps = MutableStateFlow(false)
 
     // Filtered / Searched conversations
@@ -137,7 +158,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun navigateToConversation(id: String) {
-        // Save current draft before switching
         val oldId = _activeConversationId.value
         if (oldId != null && inputText.value.isNotBlank()) {
             viewModelScope.launch {
@@ -146,10 +166,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         _activeConversationId.value = id
+        repository.activeViewingConversationId = id
         _currentScreen.value = Screen.Chat(id)
+        isInChatSearching.value = false
+        inChatSearchQuery.value = ""
 
-        // Restore draft for the conversation
         viewModelScope.launch {
+            repository.markConversationAsRead(id)
             val conv = repository.getConversationFlow(id)
             conv.collect { c ->
                 if (c != null && inputText.value.isEmpty()) {
@@ -163,9 +186,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val newId = repository.createConversation()
             _activeConversationId.value = newId
+            repository.activeViewingConversationId = newId
             _currentScreen.value = Screen.Chat(newId)
             inputText.value = prefilledPrompt
             activeAttachment.value = null
+            isInChatSearching.value = false
+            inChatSearchQuery.value = ""
         }
     }
 
@@ -176,7 +202,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateBack() {
         when (_currentScreen.value) {
             is Screen.Chat -> {
-                // Persist draft
                 val id = _activeConversationId.value
                 if (id != null) {
                     viewModelScope.launch {
@@ -184,7 +209,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 _activeConversationId.value = null
+                repository.activeViewingConversationId = null
                 _currentScreen.value = Screen.ConversationList
+                isInChatSearching.value = false
+                inChatSearchQuery.value = ""
             }
             Screen.StarredMessages -> {
                 _currentScreen.value = Screen.ConversationList
@@ -229,6 +257,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repository.editMessageAndBranch(convId, userMessageId, newContent)
     }
 
+    fun summarizeCurrentConversation() {
+        val convId = _activeConversationId.value ?: return
+        repository.summarizeConversation(convId)
+    }
+
     fun toggleStarMessage(messageId: String, currentStarred: Boolean) {
         viewModelScope.launch {
             repository.toggleStarMessage(messageId, !currentStarred)
@@ -245,6 +278,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val convId = _activeConversationId.value ?: return
         viewModelScope.launch {
             repository.deleteMessagePair(userMsgId, assistantMsgId)
+        }
+    }
+
+    fun flagMessage(messageId: String, reason: String) {
+        val convId = _activeConversationId.value ?: return
+        viewModelScope.launch {
+            repository.flagMessageReport(messageId, convId, reason)
+            messageToFlag.value = null
         }
     }
 
@@ -291,6 +332,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.deleteConversation(conv.id)
             if (_activeConversationId.value == conv.id) {
                 _activeConversationId.value = null
+                repository.activeViewingConversationId = null
                 _currentScreen.value = Screen.ConversationList
             }
             conversationToDelete.value = null
@@ -300,6 +342,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateFolderForConversation(conversationId: String, folderId: String?) {
         viewModelScope.launch {
             repository.updateFolder(conversationId, folderId)
+        }
+    }
+
+    fun updateModelForConversation(conversationId: String, modelId: String?) {
+        viewModelScope.launch {
+            repository.updateModelOverride(conversationId, modelId)
+        }
+    }
+
+    fun updateContentFilterForConversation(conversationId: String, level: String) {
+        viewModelScope.launch {
+            repository.updateContentFilterLevel(conversationId, level)
         }
     }
 
@@ -354,11 +408,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeAttachment.value = null
     }
 
+    fun openArtifact(title: String, type: String, language: String, content: String) {
+        activeArtifact.value = ArtifactItem(
+            id = java.util.UUID.randomUUID().toString(),
+            title = title,
+            type = type,
+            language = language,
+            content = content
+        )
+    }
+
     fun deleteAllDataConfirmed() {
         viewModelScope.launch {
             repository.deleteAllData()
             showDeleteAllDataDialog.value = false
             _activeConversationId.value = null
+            repository.activeViewingConversationId = null
             _currentScreen.value = Screen.ConversationList
         }
     }

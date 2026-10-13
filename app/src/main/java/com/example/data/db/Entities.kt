@@ -9,7 +9,8 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["updatedAt"]),
         Index(value = ["isPinned"]),
-        Index(value = ["isArchived"])
+        Index(value = ["isArchived"]),
+        Index(value = ["hasUnreadResponse"])
     ]
 )
 data class ConversationEntity(
@@ -24,7 +25,9 @@ data class ConversationEntity(
     val customInstructions: String? = null,
     val modelId: String? = null,
     val draftMessage: String = "",
-    val lastMessageSnippet: String = ""
+    val lastMessageSnippet: String = "",
+    val hasUnreadResponse: Boolean = false,
+    val contentFilterLevel: String = "standard" // "standard", "relaxed", "strict"
 )
 
 @Entity(
@@ -67,5 +70,14 @@ data class PromptTemplateEntity(
     val title: String,
     val shortcut: String,
     val content: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "flagged_reports")
+data class FlaggedReportEntity(
+    @PrimaryKey val id: String,
+    val messageId: String,
+    val conversationId: String,
+    val reason: String,
     val createdAt: Long = System.currentTimeMillis()
 )
