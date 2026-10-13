@@ -48,6 +48,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
@@ -58,6 +59,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
@@ -141,6 +145,7 @@ import com.example.ui.theme.HeadlineLight
 import com.example.ui.theme.SalimCard
 import com.example.ui.theme.SalimCornerRadius
 import com.example.ui.theme.SalimGradientBackground
+import com.example.ui.theme.SalimPill
 import com.example.ui.theme.SalimPrimaryButton
 import com.example.ui.theme.SalimSecondaryButton
 import com.example.ui.theme.SalimShape
@@ -647,6 +652,99 @@ fun ChatScreen(
                         }
                     )
                 ) {
+                    if (messages.isEmpty()) {
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 28.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(SalimShape)
+                                        .background(if (isDark) CardSurfaceDark else CardSurfaceLight)
+                                        .border(1.dp, if (isDark) Color(0xFF2E332E) else Color(0xFFE2E6DF), SalimShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = if (isDark) AccentGold else AccentGreen,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(14.dp))
+
+                                Text(
+                                    text = "How can Salim help you today?",
+                                    style = SalimTextStyles.Title,
+                                    color = headlineColor
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                Text(
+                                    text = "Tap a starter prompt to begin, or type / for templates",
+                                    style = SalimTextStyles.Caption,
+                                    color = captionColor
+                                )
+
+                                Spacer(modifier = Modifier.height(20.dp))
+
+                                val starterPills = listOf(
+                                    "Explain quantum computing principles simply",
+                                    "Draft a production-ready Kotlin class",
+                                    "Summarize clean architecture patterns",
+                                    "Analyze trade-offs between SQL and NoSQL",
+                                    "Brainstorm creative product features"
+                                )
+
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    starterPills.forEach { starterPrompt ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(SalimShape)
+                                                .border(1.dp, if (isDark) Color(0xFF2E332E) else Color(0xFFE2E6DF), SalimShape)
+                                                .background(if (isDark) CardSurfaceDark else CardSurfaceLight)
+                                                .clickable {
+                                                    viewModel.inputText.value = starterPrompt
+                                                }
+                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ChatBubbleOutline,
+                                                contentDescription = null,
+                                                tint = if (isDark) AccentGold else AccentGreen,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                text = starterPrompt,
+                                                style = SalimTextStyles.Secondary,
+                                                color = headlineColor,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                                contentDescription = null,
+                                                tint = captionColor,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     itemsIndexed(messages, key = { _, it -> it.id }) { _, message ->
                         val isStreamingThis = message.id == streamingId
                         val displayContent = if (isStreamingThis && streamingContent.isNotEmpty()) {
@@ -683,6 +781,7 @@ fun ChatScreen(
                                 message = message,
                                 content = displayContent,
                                 isStreaming = isStreamingThis && isGenerating,
+                                isSpeaking = currentSpeakingId == message.id,
                                 showTimestamp = showTimestamps,
                                 showTokens = showTokenUsage,
                                 isHighlighted = isHighlighted,
@@ -1250,24 +1349,63 @@ fun ChatScreen(
                         style = SalimTextStyles.Caption
                     )
                     AvailableModels.forEach { model ->
+                        val isCurrent = (conversation?.modelId ?: viewModel.preferences.selectedModel.value) == model.id
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(SalimShape)
+                                .border(
+                                    width = if (isCurrent) 1.5.dp else 1.dp,
+                                    color = if (isCurrent) (if (isDark) AccentGold else AccentGreen) else (if (isDark) Color(0xFF2E332E) else Color(0xFFE2E6DF)),
+                                    shape = SalimShape
+                                )
+                                .background(if (isCurrent) (if (isDark) Color(0xFF1E241E) else Color(0xFFF1F6ED)) else (if (isDark) CardSurfaceDark else CardSurfaceLight))
                                 .clickable {
                                     retryModelTargetMessageId = null
                                     viewModel.updateModelForConversation(conversationId, model.id)
                                     viewModel.regenerateMessage(targetId)
                                 }
-                                .padding(vertical = 8.dp, horizontal = 12.dp),
+                                .padding(vertical = 10.dp, horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = model.displayName,
-                                style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(text = model.badge, style = SalimTextStyles.Caption, color = AccentGreen)
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clip(CircleShape)
+                                    .border(1.5.dp, if (isCurrent) (if (isDark) AccentGold else AccentGreen) else captionColor, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isCurrent) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isDark) AccentGold else AccentGreen)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = model.displayName,
+                                    style = SalimTextStyles.Body.copy(fontWeight = FontWeight.Bold),
+                                    color = if (isCurrent) (if (isDark) AccentGold else AccentGreen) else headlineColor
+                                )
+                                Text(text = model.description, style = SalimTextStyles.Caption, color = captionColor)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(SalimShape)
+                                    .background(if (isCurrent) (if (isDark) AccentGold else AccentGreen) else AccentGreen.copy(alpha = 0.15f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = model.badge,
+                                    style = SalimTextStyles.Caption.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                    color = if (isCurrent) (if (isDark) Color(0xFF141715) else Color.White) else AccentGreen
+                                )
+                            }
                         }
                     }
                 }
@@ -1457,7 +1595,7 @@ fun ChatScreen(
             onDismissRequest = { showScheduledPromptDialog = false },
             title = { Text("Daily Scheduled Prompt", style = SalimTextStyles.Title) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(text = "Configure a prompt to run automatically on a recurring schedule:", style = SalimTextStyles.Caption)
                     BasicTextField(
                         value = scheduledPromptText,
@@ -1469,7 +1607,21 @@ fun ChatScreen(
                             .padding(10.dp),
                         textStyle = SalimTextStyles.Body.copy(color = headlineColor)
                     )
-                    Text(text = "Delivery time: $scheduledTimeText", style = SalimTextStyles.Caption, color = AccentGreen)
+                    Text(text = "Delivery time preset:", style = SalimTextStyles.Caption, color = headlineColor)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("08:00 AM", "12:00 PM", "06:00 PM", "09:00 PM").forEach { time ->
+                            SalimPill(
+                                text = time,
+                                isSelected = scheduledTimeText == time,
+                                isDark = isDark,
+                                modifier = Modifier.weight(1f),
+                                onClick = { scheduledTimeText = time }
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -1477,7 +1629,7 @@ fun ChatScreen(
                     text = "Save Schedule",
                     onClick = {
                         showScheduledPromptDialog = false
-                        Toast.makeText(context, "Scheduled daily prompt registered", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Scheduled daily prompt registered for $scheduledTimeText", Toast.LENGTH_SHORT).show()
                     },
                     isDark = isDark
                 )
@@ -1492,6 +1644,7 @@ fun ChatScreen(
 
     // Model Override Dialog (Section N.7)
     if (showModelOverrideDialog) {
+        val currentResponseLength by viewModel.preferences.responseLength.collectAsState()
         AlertDialog(
             onDismissRequest = { showModelOverrideDialog = false },
             title = { Text("Model & Response Mode", style = SalimTextStyles.Title) },
@@ -1504,25 +1657,61 @@ fun ChatScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(SalimShape)
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) (if (isDark) AccentGold else AccentGreen) else (if (isDark) Color(0xFF2E332E) else Color(0xFFE2E6DF)),
+                                    shape = SalimShape
+                                )
+                                .background(
+                                    if (isSelected) {
+                                        if (isDark) Color(0xFF1E241E) else Color(0xFFF1F6ED)
+                                    } else {
+                                        if (isDark) CardSurfaceDark else CardSurfaceLight
+                                    }
+                                )
                                 .clickable {
                                     viewModel.updateModelForConversation(conversationId, model.id)
                                     showModelOverrideDialog = false
                                 }
-                                .padding(vertical = 8.dp, horizontal = 12.dp),
+                                .padding(vertical = 10.dp, horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = {
-                                    viewModel.updateModelForConversation(conversationId, model.id)
-                                    showModelOverrideDialog = false
-                                },
-                                colors = RadioButtonDefaults.colors(selectedColor = AccentGreen)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column {
-                                Text(text = model.displayName, style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold))
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clip(CircleShape)
+                                    .border(
+                                        width = 1.5.dp,
+                                        color = if (isSelected) (if (isDark) AccentGold else AccentGreen) else captionColor,
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSelected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isDark) AccentGold else AccentGreen)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = model.displayName,
+                                    style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold),
+                                    color = if (isSelected) (if (isDark) AccentGold else AccentGreen) else headlineColor
+                                )
                                 Text(text = model.description, style = SalimTextStyles.Caption, color = captionColor)
+                            }
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected",
+                                    tint = if (isDark) AccentGold else AccentGreen,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }
@@ -1534,12 +1723,12 @@ fun ChatScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf("short" to "Concise", "medium" to "Balanced", "long" to "Deep").forEach { (mode, label) ->
-                            val active = viewModel.preferences.responseLength.collectAsState().value == mode
-                            SalimSecondaryButton(
+                            SalimPill(
                                 text = label,
-                                onClick = { viewModel.preferences.setResponseLength(mode) },
+                                isSelected = currentResponseLength == mode,
+                                isDark = isDark,
                                 modifier = Modifier.weight(1f),
-                                isDark = isDark
+                                onClick = { viewModel.preferences.setResponseLength(mode) }
                             )
                         }
                     }
@@ -1576,16 +1765,18 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
                     Text("Content Sensitivity:", style = SalimTextStyles.Caption)
+                    Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf("standard", "strict", "relaxed").forEach { level ->
-                            SalimSecondaryButton(
+                            SalimPill(
                                 text = level.replaceFirstChar { it.uppercase() },
-                                onClick = { selectedFilterLevel = level },
+                                isSelected = selectedFilterLevel == level,
+                                isDark = isDark,
                                 modifier = Modifier.weight(1f),
-                                isDark = isDark
+                                onClick = { selectedFilterLevel = level }
                             )
                         }
                     }
@@ -1776,10 +1967,11 @@ private fun UserMessageBubble(
                 .clickable { showActions = !showActions }
                 .padding(horizontal = padH, vertical = padV)
         ) {
-            Text(
-                text = content,
-                style = SalimTextStyles.Body.copy(fontSize = (17 * fontScale).sp),
-                color = textColor
+            SalimMarkdownRenderer(
+                content = content,
+                textColor = textColor,
+                isDark = isDark,
+                fontScale = fontScale
             )
         }
 
@@ -1797,13 +1989,32 @@ private fun UserMessageBubble(
             }
         }
 
+        var isCopied by remember { mutableStateOf(false) }
+        LaunchedEffect(isCopied) {
+            if (isCopied) {
+                delay(1800)
+                isCopied = false
+            }
+        }
+
         AnimatedVisibility(visible = showActions) {
             Row(
                 modifier = Modifier.padding(top = 4.dp, end = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy message", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
+                IconButton(
+                    onClick = {
+                        onCopy()
+                        isCopied = true
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                        contentDescription = if (isCopied) "Copied" else "Copy message",
+                        tint = if (isCopied) AccentGreen else (if (isDark) SecondaryCaptionDark else SecondaryCaptionLight),
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
                 IconButton(onClick = onEdit, modifier = Modifier.size(28.dp)) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit message", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
@@ -1866,6 +2077,7 @@ private fun AssistantMessageBubble(
     message: MessageEntity,
     content: String,
     isStreaming: Boolean,
+    isSpeaking: Boolean = false,
     showTimestamp: Boolean,
     showTokens: Boolean,
     isHighlighted: Boolean,
@@ -1994,14 +2206,33 @@ private fun AssistantMessageBubble(
             }
         }
 
+        var isCopied by remember { mutableStateOf(false) }
+        LaunchedEffect(isCopied) {
+            if (isCopied) {
+                delay(1800)
+                isCopied = false
+            }
+        }
+
         // Bottom Action Bar
         Row(
             modifier = Modifier.padding(top = 10.dp, start = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.ContentCopy, contentDescription = "Copy response", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
+            IconButton(
+                onClick = {
+                    onCopy()
+                    isCopied = true
+                },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                    contentDescription = if (isCopied) "Copied" else "Copy response",
+                    tint = if (isCopied) AccentGreen else (if (isDark) SecondaryCaptionDark else SecondaryCaptionLight),
+                    modifier = Modifier.size(16.dp)
+                )
             }
 
             IconButton(onClick = onStarToggle, modifier = Modifier.size(32.dp)) {
@@ -2013,8 +2244,21 @@ private fun AssistantMessageBubble(
                 )
             }
 
-            IconButton(onClick = onSpeak, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = "Read aloud", tint = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight, modifier = Modifier.size(16.dp))
+            IconButton(
+                onClick = onSpeak,
+                modifier = Modifier
+                    .size(32.dp)
+                    .then(
+                        if (isSpeaking) Modifier.clip(CircleShape).background(if (isDark) AccentGold.copy(alpha = 0.2f) else AccentGreen.copy(alpha = 0.2f))
+                        else Modifier
+                    )
+            ) {
+                Icon(
+                    imageVector = if (isSpeaking) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = if (isSpeaking) "Stop playback" else "Read aloud",
+                    tint = if (isSpeaking) (if (isDark) AccentGold else AccentGreen) else (if (isDark) SecondaryCaptionDark else SecondaryCaptionLight),
+                    modifier = Modifier.size(16.dp)
+                )
             }
 
             if (!isStreaming) {

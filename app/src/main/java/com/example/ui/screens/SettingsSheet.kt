@@ -68,6 +68,7 @@ import com.example.ui.theme.HeadlineDark
 import com.example.ui.theme.HeadlineLight
 import com.example.ui.theme.SalimCard
 import com.example.ui.theme.SalimCornerRadius
+import com.example.ui.theme.SalimPill
 import com.example.ui.theme.SalimPrimaryButton
 import com.example.ui.theme.SalimSecondaryButton
 import com.example.ui.theme.SalimShape
@@ -89,6 +90,10 @@ fun SettingsSheet(
     val currentTheme by preferences.themeMode.collectAsState()
     val currentModel by preferences.selectedModel.collectAsState()
     val responseStyle by preferences.responseStyle.collectAsState()
+    val responseLength by preferences.responseLength.collectAsState()
+    val bubbleDensity by preferences.bubbleDensity.collectAsState()
+    val fontScaleOverride by preferences.fontScaleOverride.collectAsState()
+    val contextTrimming by preferences.contextTrimmingStrategy.collectAsState()
     val globalInstructions by preferences.globalInstructions.collectAsState()
     val temperature by preferences.temperature.collectAsState()
     val topP by preferences.topP.collectAsState()
@@ -199,6 +204,120 @@ fun SettingsSheet(
                     isSelected = responseStyle == "detailed",
                     isDark = isDark,
                     onClick = { preferences.setResponseStyle("detailed") }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Response Length / Effort Pills
+            Text("Response Depth & Effort", style = SalimTextStyles.Title, color = headlineColor)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Target length and thoroughness across dialogue exchanges.",
+                style = SalimTextStyles.Caption,
+                color = captionColor
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SalimPill(
+                    text = "Concise",
+                    isSelected = responseLength == "short",
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setResponseLength("short") }
+                )
+                SalimPill(
+                    text = "Balanced",
+                    isSelected = responseLength == "medium",
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setResponseLength("medium") }
+                )
+                SalimPill(
+                    text = "Deep",
+                    isSelected = responseLength == "long",
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setResponseLength("long") }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Message Spacing Density Pills
+            Text("Message Spacing Density", style = SalimTextStyles.Title, color = headlineColor)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Compact spacing for speed or comfortable for readability.",
+                style = SalimTextStyles.Caption,
+                color = captionColor
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SalimPill(
+                    text = "Compact",
+                    isSelected = bubbleDensity == "compact",
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setBubbleDensity("compact") }
+                )
+                SalimPill(
+                    text = "Comfortable",
+                    isSelected = bubbleDensity == "comfortable",
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setBubbleDensity("comfortable") }
+                )
+                SalimPill(
+                    text = "Spacious",
+                    isSelected = bubbleDensity == "spacious",
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setBubbleDensity("spacious") }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Typography Size Pills
+            Text("Typography Size", style = SalimTextStyles.Title, color = headlineColor)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Adjust text scale for all dialogues and markdown components.",
+                style = SalimTextStyles.Caption,
+                color = captionColor
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SalimPill(
+                    text = "Default 100%",
+                    isSelected = fontScaleOverride <= 1.05f && fontScaleOverride >= 0.95f,
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setFontScaleOverride(1.0f) }
+                )
+                SalimPill(
+                    text = "Large 115%",
+                    isSelected = fontScaleOverride > 1.05f && fontScaleOverride <= 1.2f,
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setFontScaleOverride(1.15f) }
+                )
+                SalimPill(
+                    text = "X-Large 130%",
+                    isSelected = fontScaleOverride > 1.2f,
+                    isDark = isDark,
+                    modifier = Modifier.weight(1f),
+                    onClick = { preferences.setFontScaleOverride(1.3f) }
                 )
             }
 
@@ -497,6 +616,38 @@ fun SettingsSheet(
                             )
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text("Context Window Strategy", style = SalimTextStyles.Body.copy(fontWeight = FontWeight.Bold), color = headlineColor)
+                    Text("Dialogue memory behavior as conversations approach token limits", style = SalimTextStyles.Caption, color = captionColor)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        SalimPill(
+                            text = "Warn",
+                            isSelected = contextTrimming == "warn",
+                            isDark = isDark,
+                            modifier = Modifier.weight(1f),
+                            onClick = { preferences.setContextTrimmingStrategy("warn") }
+                        )
+                        SalimPill(
+                            text = "Auto-Trim",
+                            isSelected = contextTrimming == "auto_trim",
+                            isDark = isDark,
+                            modifier = Modifier.weight(1f),
+                            onClick = { preferences.setContextTrimmingStrategy("auto_trim") }
+                        )
+                        SalimPill(
+                            text = "Keep All",
+                            isSelected = contextTrimming == "keep_all",
+                            isDark = isDark,
+                            modifier = Modifier.weight(1f),
+                            onClick = { preferences.setContextTrimmingStrategy("keep_all") }
+                        )
+                    }
                 }
             }
 
@@ -580,15 +731,39 @@ private fun ThemeOptionButton(
         if (isDark) HeadlineDark else HeadlineLight
     }
 
+    val borderColor = if (isSelected) {
+        if (isDark) AccentGold else AccentGreen
+    } else {
+        if (isDark) Color(0xFF2E332E) else Color(0xFFDDE2D8)
+    }
+
     Box(
         modifier = modifier
             .clip(SalimShape)
+            .border(width = if (isSelected) 1.5.dp else 1.dp, color = borderColor, shape = SalimShape)
             .background(bgColor)
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+            .padding(vertical = 12.dp, horizontal = 4.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(text = label, style = SalimTextStyles.Secondary, color = textColor)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = textColor,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            Text(
+                text = label,
+                style = SalimTextStyles.Secondary.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                ),
+                color = textColor
+            )
+        }
     }
 }
 
@@ -606,12 +781,24 @@ private fun ResponseStyleCard(
         if (isDark) Color(0xFF2E332E) else Color(0xFFE2E6DF)
     }
 
+    val cardBg = if (isSelected) {
+        if (isDark) Color(0xFF1A221A) else Color(0xFFF0F5EC)
+    } else {
+        if (isDark) Color(0xFF141715) else Color(0xFFFAFBF8)
+    }
+
+    val titleColor = if (isSelected) {
+        if (isDark) AccentGold else AccentGreen
+    } else {
+        if (isDark) HeadlineDark else HeadlineLight
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(SalimShape)
-            .border(1.5.dp, borderColor, SalimShape)
-            .background(if (isDark) Color(0xFF141715) else Color(0xFFFAFBF8))
+            .border(if (isSelected) 1.5.dp else 1.dp, borderColor, SalimShape)
+            .background(cardBg)
             .clickable(onClick = onClick)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -619,8 +806,8 @@ private fun ResponseStyleCard(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold),
-                color = if (isDark) HeadlineDark else HeadlineLight
+                style = SalimTextStyles.Body.copy(fontWeight = FontWeight.Bold),
+                color = titleColor
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -631,12 +818,20 @@ private fun ResponseStyleCard(
         }
 
         if (isSelected) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = null,
-                tint = if (isDark) AccentGold else AccentGreen,
-                modifier = Modifier.size(20.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(if (isDark) AccentGold else AccentGreen),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = if (isDark) Color(0xFF141715) else Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }
@@ -654,12 +849,24 @@ private fun ModelSelectionCard(
         if (isDark) Color(0xFF2E332E) else Color(0xFFE2E6DF)
     }
 
+    val cardBg = if (isSelected) {
+        if (isDark) Color(0xFF1A221A) else Color(0xFFF0F5EC)
+    } else {
+        if (isDark) Color(0xFF141715) else Color(0xFFFAFBF8)
+    }
+
+    val titleColor = if (isSelected) {
+        if (isDark) AccentGold else AccentGreen
+    } else {
+        if (isDark) HeadlineDark else HeadlineLight
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(SalimShape)
-            .border(1.5.dp, borderColor, SalimShape)
-            .background(if (isDark) Color(0xFF141715) else Color(0xFFFAFBF8))
+            .border(if (isSelected) 1.5.dp else 1.dp, borderColor, SalimShape)
+            .background(cardBg)
             .clickable(onClick = onClick)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -668,20 +875,20 @@ private fun ModelSelectionCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = model.displayName,
-                    style = SalimTextStyles.Body.copy(fontWeight = FontWeight.SemiBold),
-                    color = if (isDark) HeadlineDark else HeadlineLight
+                    style = SalimTextStyles.Body.copy(fontWeight = FontWeight.Bold),
+                    color = titleColor
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Box(
                     modifier = Modifier
                         .clip(SalimShape)
-                        .background(AccentGreen.copy(alpha = 0.15f))
+                        .background(if (isSelected) (if (isDark) AccentGold else AccentGreen) else AccentGreen.copy(alpha = 0.15f))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
                         text = model.badge,
-                        style = SalimTextStyles.Caption,
-                        color = AccentGreen
+                        style = SalimTextStyles.Caption.copy(fontWeight = FontWeight.Bold),
+                        color = if (isSelected) (if (isDark) Color(0xFF141715) else Color.White) else AccentGreen
                     )
                 }
             }
@@ -700,12 +907,20 @@ private fun ModelSelectionCard(
         }
 
         if (isSelected) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = null,
-                tint = if (isDark) AccentGold else AccentGreen,
-                modifier = Modifier.size(20.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(if (isDark) AccentGold else AccentGreen),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = if (isDark) Color(0xFF141715) else Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }

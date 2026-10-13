@@ -47,6 +47,11 @@ import com.example.ui.theme.HeadlineDark
 import com.example.ui.theme.HeadlineLight
 import com.example.ui.theme.SalimCard
 import com.example.ui.theme.SalimPrimaryButton
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import com.example.ui.theme.AccentGold
+import com.example.ui.theme.SalimPill
 import com.example.ui.theme.SalimSecondaryButton
 import com.example.ui.theme.SalimShape
 import com.example.ui.theme.SalimTextStyles
@@ -68,6 +73,22 @@ fun TemplatesSheet(
     var newTitle by remember { mutableStateOf("") }
     var newShortcut by remember { mutableStateOf("") }
     var newContent by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf("All") }
+    var selectedTemplateId by remember { mutableStateOf<String?>(null) }
+
+    val categories = listOf("All", "Writing", "Coding", "Analysis", "Productivity")
+    val filteredTemplates = remember(templates, selectedCategory) {
+        if (selectedCategory == "All") templates
+        else templates.filter {
+            when (selectedCategory) {
+                "Writing" -> it.title.contains("write", true) || it.content.contains("draft", true) || it.shortcut.contains("story", true) || it.shortcut.contains("email", true)
+                "Coding" -> it.title.contains("code", true) || it.content.contains("code", true) || it.shortcut.contains("dev", true) || it.shortcut.contains("bug", true)
+                "Analysis" -> it.title.contains("explain", true) || it.content.contains("analyze", true) || it.shortcut.contains("summary", true)
+                "Productivity" -> it.title.contains("task", true) || it.content.contains("plan", true) || it.shortcut.contains("todo", true)
+                else -> true
+            }
+        }
+    }
 
     val headlineColor = if (isDark) HeadlineDark else HeadlineLight
     val captionColor = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
@@ -108,7 +129,27 @@ fun TemplatesSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Category Filter Pills
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                categories.forEach { cat ->
+                    SalimPill(
+                        text = cat,
+                        isSelected = selectedCategory == cat,
+                        isDark = isDark,
+                        onClick = { selectedCategory = cat }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Add Template Button
             SalimSecondaryButton(
@@ -121,16 +162,26 @@ fun TemplatesSheet(
                 }
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(templates, key = { it.id }) { template ->
+                items(filteredTemplates, key = { it.id }) { template ->
+                    val isSelected = selectedTemplateId == template.id
                     SalimCard(
                         isDark = isDark,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) (if (isDark) AccentGold else AccentGreen) else (if (isDark) Color(0xFF2E332E) else Color(0xFFE2E6DF)),
+                                shape = SalimShape
+                            ),
+                        onClick = {
+                            selectedTemplateId = if (isSelected) null else template.id
+                        }
                     ) {
                         Column(
                             modifier = Modifier

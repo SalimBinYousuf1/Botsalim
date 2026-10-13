@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -57,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.db.ConversationEntity
@@ -514,22 +516,42 @@ private fun FolderChip(
     val textColor = if (isSelected) {
         if (isDark) Color(0xFF141715) else Color.White
     } else {
-        if (isDark) SecondaryCaptionDark else Color(0xFF4A524A)
+        if (isDark) HeadlineDark.copy(alpha = 0.8f) else Color(0xFF2C322B)
+    }
+
+    val borderColor = if (isSelected) {
+        if (isDark) AccentGold else AccentGreen
+    } else {
+        if (isDark) Color(0xFF2E332E) else Color(0xFFDCE2D8)
     }
 
     Box(
         modifier = Modifier
             .clip(SalimShape)
+            .border(width = if (isSelected) 1.5.dp else 1.dp, color = borderColor, shape = SalimShape)
             .background(bgColor)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            style = SalimTextStyles.Caption,
-            color = textColor
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(if (isDark) AccentGold else AccentGreen)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            Text(
+                text = label,
+                style = SalimTextStyles.Caption.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                ),
+                color = textColor
+            )
+        }
     }
 }
 

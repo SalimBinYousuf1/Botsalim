@@ -10,14 +10,18 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
@@ -36,8 +40,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 // One single corner radius — 22dp — used identically everywhere across Salim
 val SalimCornerRadius: Dp = 22.dp
@@ -207,6 +213,7 @@ fun SalimPrimaryButton(
 
 /**
  * Strict Tier-2 Button: White pill with thin light-gray border and black text, min 48dp height, 22dp radius.
+ * Supports active isSelected state with solid highlighted background & accent border.
  */
 @Composable
 fun SalimSecondaryButton(
@@ -215,6 +222,7 @@ fun SalimSecondaryButton(
     modifier: Modifier = Modifier,
     isDark: Boolean = false,
     enabled: Boolean = true,
+    isSelected: Boolean = false,
     leadingIcon: (@Composable () -> Unit)? = null
 ) {
     var isPressed by remember { mutableStateOf(false) }
@@ -227,18 +235,37 @@ fun SalimSecondaryButton(
         label = "secondaryBtnScale"
     )
 
-    val bgColor = if (isDark) SecondaryButtonBgDark else SecondaryButtonBgLight
-    val textColor = if (isDark) SecondaryButtonTextDark else SecondaryButtonTextLight
-    val borderColor = if (isDark) SecondaryButtonBorderDark else SecondaryButtonBorderLight
-    val activeBg = if (isPressed) bgColor.copy(alpha = 0.88f) else bgColor
+    val defaultBg = if (isDark) SecondaryButtonBgDark else SecondaryButtonBgLight
+    val defaultText = if (isDark) SecondaryButtonTextDark else SecondaryButtonTextLight
+    val defaultBorder = if (isDark) SecondaryButtonBorderDark else SecondaryButtonBorderLight
+
+    val activeBg = if (isSelected) {
+        if (isDark) Color(0xFFE8EAE4) else Color(0xFF191C1A)
+    } else {
+        defaultBg
+    }
+
+    val activeText = if (isSelected) {
+        if (isDark) Color(0xFF141715) else Color.White
+    } else {
+        defaultText
+    }
+
+    val activeBorder = if (isSelected) {
+        if (isDark) AccentGold else AccentGreen
+    } else {
+        defaultBorder
+    }
+
+    val finalBg = if (isPressed) activeBg.copy(alpha = 0.88f) else activeBg
 
     Box(
         modifier = modifier
             .scale(scale)
             .defaultMinSize(minHeight = 48.dp)
             .clip(SalimShape)
-            .border(width = 1.dp, color = borderColor, shape = SalimShape)
-            .background(if (enabled) activeBg else activeBg.copy(alpha = 0.4f))
+            .border(width = if (isSelected) 1.5.dp else 1.dp, color = activeBorder, shape = SalimShape)
+            .background(if (enabled) finalBg else finalBg.copy(alpha = 0.4f))
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
@@ -255,20 +282,110 @@ fun SalimSecondaryButton(
         contentAlignment = Alignment.Center
     ) {
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.semantics(mergeDescendants = true) {}
+            verticalAlignment = Alignment.CenterVertically
         ) {
             if (leadingIcon != null) {
-                CompositionLocalProvider(LocalContentColor provides textColor) {
+                CompositionLocalProvider(LocalContentColor provides activeText) {
                     leadingIcon()
                 }
                 Box(modifier = Modifier.padding(end = 8.dp))
             }
             Text(
                 text = text,
-                style = SalimTextStyles.Secondary,
+                style = SalimTextStyles.Secondary.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                ),
+                color = activeText
+            )
+        }
+    }
+}
+
+/**
+ * SalimPill: Interactive Capsule/Pill for tabs, filters, and parameter options.
+ * Changes background, border, and typography immediately when selected.
+ */
+@Composable
+fun SalimPill(
+    text: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isDark: Boolean = false,
+    enabled: Boolean = true,
+    leadingIcon: (@Composable () -> Unit)? = null,
+    trailingBadge: String? = null
+) {
+    val bgColor = if (isSelected) {
+        if (isDark) Color(0xFFE8EAE4) else Color(0xFF191C1A)
+    } else {
+        if (isDark) Color(0xFF1B1E1C) else Color(0xFFF2F5EF)
+    }
+
+    val textColor = if (isSelected) {
+        if (isDark) Color(0xFF141715) else Color.White
+    } else {
+        if (isDark) HeadlineDark else HeadlineLight
+    }
+
+    val borderColor = if (isSelected) {
+        if (isDark) AccentGold else AccentGreen
+    } else {
+        if (isDark) Color(0xFF2E332E) else Color(0xFFDDE2D8)
+    }
+
+    var isPressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.95f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "pillScale"
+    )
+
+    Box(
+        modifier = modifier
+            .scale(scale)
+            .clip(SalimShape)
+            .border(width = if (isSelected) 1.5.dp else 1.dp, color = borderColor, shape = SalimShape)
+            .background(bgColor)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            if (leadingIcon != null) {
+                CompositionLocalProvider(LocalContentColor provides textColor) {
+                    leadingIcon()
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            Text(
+                text = text,
+                style = SalimTextStyles.Caption.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                ),
                 color = textColor
             )
+            if (trailingBadge != null) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (isSelected) (if (isDark) AccentGold else AccentGreen) else AccentGreen.copy(alpha = 0.2f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = trailingBadge,
+                        style = SalimTextStyles.Caption.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                        color = if (isSelected) (if (isDark) Color(0xFF141715) else Color.White) else AccentGreen
+                    )
+                }
+            }
         }
     }
 }

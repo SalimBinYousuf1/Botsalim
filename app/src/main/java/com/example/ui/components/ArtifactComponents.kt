@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.webkit.WebView
@@ -25,8 +27,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
@@ -48,7 +52,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -91,7 +98,9 @@ fun ArtifactPanelSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var editableContent by remember(artifact) { mutableStateOf(artifact.content) }
+    var isCopied by remember { mutableStateOf(false) }
     val headlineColor = if (isDark) HeadlineDark else HeadlineLight
     val captionColor = if (isDark) SecondaryCaptionDark else SecondaryCaptionLight
     val sheetBg = if (isDark) CardSurfaceDark else CardSurfaceLight
@@ -99,7 +108,9 @@ fun ArtifactPanelSheet(
     val isPreviewable = artifact.language.equals("html", true) ||
             artifact.language.equals("svg", true) ||
             artifact.language.equals("markdown", true) ||
-            artifact.language.equals("md", true)
+            artifact.language.equals("md", true) ||
+            artifact.language.equals("mermaid", true) ||
+            artifact.language.equals("chart", true)
 
     val availableTabs = remember(isPreviewable) {
         if (isPreviewable) {
@@ -164,6 +175,27 @@ fun ArtifactPanelSheet(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = {
+                            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cb.setPrimaryClip(ClipData.newPlainText(artifact.title, editableContent))
+                            isCopied = true
+                            Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                            scope.launch {
+                                delay(2000)
+                                isCopied = false
+                            }
+                        },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = if (isCopied) "Copied" else "Copy Code",
+                            tint = if (isCopied) AccentGreen else captionColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
                             val sendIntent = Intent().apply {
                                 action = Intent.ACTION_SEND
                                 putExtra(Intent.EXTRA_TEXT, editableContent)
@@ -174,11 +206,11 @@ fun ArtifactPanelSheet(
                         },
                         modifier = Modifier.size(36.dp)
                     ) {
-                        Icon(Icons.Default.Share, contentDescription = "Export Artifact", tint = captionColor)
+                        Icon(Icons.Default.Share, contentDescription = "Export Artifact", tint = captionColor, modifier = Modifier.size(18.dp))
                     }
 
                     IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = captionColor)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = captionColor, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -200,10 +232,19 @@ fun ArtifactPanelSheet(
                 }
             ) {
                 availableTabs.forEachIndexed { index, title ->
+                    val isSelected = safeTabIndex == index
                     Tab(
-                        selected = safeTabIndex == index,
+                        selected = isSelected,
                         onClick = { selectedTabIndex = index },
-                        text = { Text(title, style = SalimTextStyles.Secondary) }
+                        text = {
+                            Text(
+                                text = title,
+                                style = SalimTextStyles.Secondary.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (isSelected) (if (isDark) AccentGold else AccentGreen) else captionColor
+                            )
+                        }
                     )
                 }
             }
@@ -217,29 +258,58 @@ fun ArtifactPanelSheet(
                     .fillMaxWidth()
             ) {
                 if (currentTab == "Safe Preview" && isPreviewable) {
-                    // Safe Sandboxed WebView preview
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(SalimShape)
-                            .background(Color.White)
-                    ) {
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.allowFileAccess = false
-                                    settings.allowContentAccess = false
-                                    webViewClient = object : WebViewClient() {}
-                                    loadDataWithBaseURL(null, editableContent, "text/html", "UTF-8", null)
-                                }
-                            },
-                            update = { webView ->
-                                webView.loadDataWithBaseURL(null, editableContent, "text/html", "UTF-8", null)
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                    val isMarkdownOrChart = artifact.language.equals("markdown", true) ||
+                            artifact.language.equals("md", true) ||
+                            artifact.language.equals("mermaid", true) ||
+                            artifact.language.equals("chart", true)
+
+                    if (isMarkdownOrChart) {
+                        val previewContent = remember(editableContent, artifact.language) {
+                            if (artifact.language.equals("mermaid", true) || artifact.language.equals("chart", true)) {
+                                "```${artifact.language}\n$editableContent\n```"
+                            } else {
+                                editableContent
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(SalimShape)
+                                .background(if (isDark) Color(0xFF141715) else Color(0xFFF9FAF8))
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp)
+                        ) {
+                            SalimMarkdownRenderer(
+                                content = previewContent,
+                                textColor = headlineColor,
+                                isDark = isDark
+                            )
+                        }
+                    } else {
+                        // Safe Sandboxed WebView preview for HTML/SVG
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(SalimShape)
+                                .background(Color.White)
+                        ) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    WebView(ctx).apply {
+                                        settings.javaScriptEnabled = true
+                                        settings.domStorageEnabled = true
+                                        settings.allowFileAccess = false
+                                        settings.allowContentAccess = false
+                                        webViewClient = object : WebViewClient() {}
+                                        loadDataWithBaseURL(null, editableContent, "text/html", "UTF-8", null)
+                                    }
+                                },
+                                update = { webView ->
+                                    webView.loadDataWithBaseURL(null, editableContent, "text/html", "UTF-8", null)
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     }
                 } else {
                     // Live Editor
